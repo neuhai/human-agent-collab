@@ -1,0 +1,175 @@
+ecl_version: "1.0"
+
+experiment:
+  id: daytrader_single_round
+  title: "DayTrader (Single Round)"
+  description: "One-round individual vs. group investment; communication is UI-only and group-only."
+  timing:
+    session_duration_minutes: 10
+
+types:
+  ID: { kind: scalar, base: string }
+  String: { kind: scalar, base: string, max_len: 128 }
+  NonNeg: { kind: scalar, base: number, min: 0 }
+  Boolean: { kind: scalar, base: boolean }
+  Ref: { kind: ref, of: Participant }
+  RoleKind: { kind: enum, values: [human, agent] }
+  InvestKind: { kind: enum, values: [individual, group] }
+  ActionKind: { kind: enum, values: [invest] }
+
+objects:
+  Participant:
+    key: id
+    attrs:
+      id:   { type: ID, required: true }
+      name: { type: String, required: true }
+      role: { type: RoleKind, required: true }
+      income:    { type: NonNeg, default: 0 }
+      endowment: { type: NonNeg, default: 20 }   # 单轮预算上限
+
+  Session:
+    key: id
+    attrs:
+      id: { type: ID, required: true, const: "S" }
+      settled: { type: Boolean, default: false }
+      total_group_contrib: { type: NonNeg, default: 0 }
+      avg_group_contrib:   { type: NonNeg, default: 0 }
+
+  Contribution:
+    key: id
+    attrs:
+      id: { type: ID, required: true }
+      participant: { type: Ref, of: Participant, required: true }
+      invest_type: { type: InvestKind, required: true }
+      amount: { type: NonNeg, required: true }
+      created_at: { type: NonNeg, required: true }
+
+variables:
+  max_invest_per_session: 20
+  individual_multiplier: 2.0
+  group_multiplier_on_avg: 3.0
+
+constraints:
+  - "on": Participant.income
+    rule: "x >= 0"
+  - "on": Participant.endowment
+    rule: "0 <= x <= variables.max_invest_per_session"
+  - "on": Contribution.amount
+    rule: "0 <= x <= variables.max_invest_per_session"
+
+policies:
+  actions:
+    SubmitDecision:
+      who: { role_in: [human, agent] }
+      constraints: [ "Session.settled('S') == false" ]
+    SettleSession:
+      who: { role_in: [agent] }
+      constraints:
+        - "Session.settled('S') == false"
+  visibility:
+    modules:
+      trade:   { enabled_if: "false" }
+      my_task: { enabled_if: "false" }
+    fields:
+      Participant.income: { visible_if: "true" }
+      Session.total_group_contrib: { visible_if: "true" }
+      Session.avg_group_contrib:   { visible_if: "true" }
+
+actions:
+  SubmitDecision:
+    input:
+      action_kind: { type: ActionKind, required: true }
+      invest_type: { type: InvestKind, required: true }
+      amount:      { type: NonNeg, required: true }
+    preconditions:
+      - "input.action_kind == 'invest'"
+      - "0 <= input.amount && input.amount <= variables.max_invest_per_session"
+      - "input.amount <= Participant.endowment(actor.id)"
+      - "Session.settled('S') == false"
+    effects:
+      - create: Contribution
+        value:
+          id: "uuid()"
+          participant: "actor.id"
+          invest_type: "input.invest_type"
+          amount: "input.amount"
+          created_at: "now()"
+      - dec: "Participant.endowment(actor.id)"
+        by: "input.amount"
+
+  SettleSession:
+    input: {}
+    preconditions: [ "Session.settled('S') == false" ]
+    effects:
+      - compute: "group_total"
+        expr: "sum(filter(Contribution, it.invest_type == 'group').amount)"
+      - compute: "n_participants"
+        expr: "count(Participant)"
+      - compute: "group_avg"
+        expr: "if(n_participants > 0, group_total / n_participants, 0)"
+      - set: "Session.total_group_contrib('S')"
+        to: "group_total"
+      - set: "Session.avg_group_contrib('S')"
+        to: "group_avg"
+      - foreach:
+          in: "Contribution"
+          do:
+            - choose:
+                when: "it.invest_type == 'individual'"
+                then:
+                  - inc: "Participant.income(it.participant)"
+                    by: "it.amount * variables.individual_multiplier"
+                else:
+                  - inc: "Participant.income(it.participant)"
+                    by: "group_avg * variables.group_multiplier_on_avg"
+      - set: "Session.settled('S')"
+        to: true
+
+views:
+  modules:
+    - id: my_status
+      label: "My Status"
+      visible_if: "true"
+      bindings:
+        - { label: "Income",  path: "Participant.income" }
+        - { label: "Budget",  path: "Participant.endowment" }
+
+    - id: my_action
+      label: "My Action"
+      visible_if: "Session.settled('S') == false"
+      bindings:
+        - label: "Action"
+          control: "select"
+          options: ["invest"]
+          bind_to: "$local.action_kind"
+        - label: "Decision"
+          control: "segmented"
+          options: ["individual", "group"]
+          bind_to: "$local.invest_type"
+        - label: "Amount"
+          control: "number"
+          min: 0
+          max: "variables.max_invest_per_session"
+          step: 1
+          bind_to: "$local.amount"
+        - label: "Submit"
+          action: "SubmitDecision"
+          inputs:
+            - { name: "action_kind", from: "$local.action_kind" }
+            - { name: "invest_type", from: "$local.invest_type" }
+            - { name: "amount",      from: "$local.amount" }
+        - label: "My Investment History"
+          path: "Contribution.amount"
+
+    - id: message_tab
+      label: "Message Tab"
+      visible_if: "true"
+      communication_level: "group_chat"
+
+    - id: info_dashboard
+      label: "Information Dashboard"
+      visible_if: "true"
+      bindings:
+        - { label: "Group Total (this session)", path: "Session.total_group_contrib" }
+        - { label: "Group Avg (this session)",   path: "Session.avg_group_contrib" }
+        - { label: "All Participants' Income",   path: "Participant.income" }

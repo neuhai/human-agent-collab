@@ -1,0 +1,19 @@
+[project]
+name = "shapefactory-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.12.15",
+    "flask>=3.1.1",
+    "flask-cors>=6.0.1",
+    "flask-socketio>=5.5.1",
+    "mcp[cli]>=1.12.3",
+    "openai>=1.99.1",
+    "psycopg2-binary>=2.9.10",
+    "pyjwt>=2.10.1",
+    "python-dotenv>=1.1.1",
+    "python-socketio>=5.13.0",
+    "requests>=2.32.4",
+]
