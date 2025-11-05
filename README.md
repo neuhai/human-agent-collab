@@ -87,9 +87,13 @@ The script will automatically:
 #### Step 4: Start the Application
 ```bash
 # Terminal 1 - Backend Server
-cd backend && python app.py
+cd backend
+# On Windows:
+source .venv/Scripts/activate  
+# On MacOS: source ../.venv/bin/activate
+python app.py
 
-# Terminal 2 - Frontend Development Server  
+# Terminal 2 - Frontend Development Server, from the project root
 cd vue-app && npm run dev
 ```
 

@@ -325,3 +325,6 @@ settings.local.*
 Analysis/
 
 setup_and_run.sh
+
+
+backend/.env
