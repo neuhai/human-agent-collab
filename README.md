@@ -29,12 +29,12 @@ Copy and paste the command for your operating system into a terminal and press E
 
 **For macOS or Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/neuhai/human-agent-collab/main/quick-start.sh | bash
+curl -fsSL https://raw.githubusercontent.com/neuhai/human-agent-collab/main/deployment/quick-start.sh | bash
 ```
 
 **For Windows (in PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/neuhai/human-agent-collab/main/quick-start.ps1 | iex
+irm https://raw.githubusercontent.com/neuhai/human-agent-collab/main/deployment/quick-start.ps1 | iex
 ```
 
 This command will automatically set up all necessary files and guide you through the next steps.
@@ -127,21 +127,21 @@ cd human-agent-collab
 #### 2. Create Environment File
 Copy the development environment template.
 ```bash
-cp .env.dev.template .env
+cp deployment/.env.dev.template .env
 ```
 Edit the `.env` file and set your `POSTGRES_PASSWORD` and `OPENAI_API_KEY`.
 
 #### 3. Build and Run
 Use `docker-compose` to build and start the services in the background. This command will build the `dev` images.
 ```bash
-docker-compose -f docker-compose.dev.yml up --build -d
+docker-compose -f deployment/docker-compose.dev.yml up --build -d
 ```
 
 #### 4. Access the Services
 - **Frontend (with hot-reload)**: **http://localhost:3000**
 - **Backend API**: **http://localhost:5002**
 
-For more detailed commands (viewing logs, accessing container shells, etc.), please refer to the `README.docker-dev.md` file.
+For more detailed commands (viewing logs, accessing container shells, etc.), please refer to the `deployment/README.docker-dev.md` file.
 
 ---
 
@@ -159,7 +159,7 @@ cd human-agent-collab
 #### 2. Create Environment File
 Copy the production environment template. This file will hold your secret credentials.
 ```bash
-cp .env.prod.template .env.prod
+cp deployment/.env.prod.template .env.prod
 ```
 Now, edit the `.env.prod` file and set the required values.
 
@@ -167,11 +167,11 @@ Now, edit the `.env.prod` file and set the required values.
 Use the automated deployment script to build and start all services using the `prod` Dockerfiles.
 ```bash
 # On Linux/macOS (you may need to make it executable first)
-chmod +x deploy-prod.sh
-./deploy-prod.sh
+chmod +x deployment/deploy-prod.sh
+./deployment/deploy-prod.sh
 
 # On Windows (using Git Bash or WSL)
-./deploy-prod.sh
+./deployment/deploy-prod.sh
 ```
 
 #### 4. Access the Application

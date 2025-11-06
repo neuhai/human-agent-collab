@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: shape_factory_research
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../backend/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -32,8 +32,8 @@ services:
   backend:
     image: ghcr.io/neuhai/human-agent-backend:latest
     build:
-      context: .
-      dockerfile: backend.prod.Dockerfile
+      context: ..
+      dockerfile: ./deployment/backend.prod.Dockerfile
     container_name: human-agent-backend-prod
     environment:
       # Database
@@ -82,8 +82,8 @@ services:
   frontend:
     image: ghcr.io/neuhai/human-agent-frontend:latest
     build:
-      context: .
-      dockerfile: frontend.prod.Dockerfile
+      context: ..
+      dockerfile: ./deployment/frontend.prod.Dockerfile
       args:
         VITE_BACKEND_URL: /api
     container_name: human-agent-frontend-prod

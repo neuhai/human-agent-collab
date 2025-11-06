@@ -1,6 +1,6 @@
 {
     "name": "Human-Agent Collab Dev Container",
-    "dockerComposeFile": "../docker-compose.dev.yml",
+    "dockerComposeFile": "../deployment/docker-compose.dev.yml",
     "service": "backend",
     "workspaceFolder": "/app",
 
