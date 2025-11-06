@@ -2,6 +2,8 @@
 
 We present a configurable research platform for conducting Human-LLM agent collaboration experiments. The system supports multiple experiment paradigms, including ShapeFactory, DayTrader, EssayRanking, and WordGuessing, along with an Experiment Configuration Language (ECL) for custom experiment design.
 
+![image](https://github.com/neuhai/human-agent-collab/blob/main/preview.gif)
+
 ## Table of Contents
 
 - [System Requirements](#system-requirements)
