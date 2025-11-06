@@ -24,28 +24,36 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
+      # Extract metadata for the backend image
+      - name: Extract backend Docker metadata
+        id: meta-backend
         uses: docker/metadata-action@v4
         with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/human-agent-collab-backend
-            ghcr.io/${{ github.repository_owner }}/human-agent-collab-frontend
+          images: ghcr.io/${{ github.repository_owner }}/human-agent-collab-backend
 
+      # Extract metadata for the frontend image
+      - name: Extract frontend Docker metadata
+        id: meta-frontend
+        uses: docker/metadata-action@v4
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/human-agent-collab-frontend
+
+      # Build and push the backend image
       - name: Build and push backend image
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./backend.prod.Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.images[0] }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
 
+      # Build and push the frontend image
       - name: Build and push frontend image
         uses: docker/build-push-action@v4
         with:
           context: .
           file: ./frontend.prod.Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.images[1] }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
