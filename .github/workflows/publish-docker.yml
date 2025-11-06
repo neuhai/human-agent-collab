@@ -31,9 +31,6 @@ jobs:
           images: |
             ghcr.io/${{ github.repository_owner }}/human-agent-collab-backend
             ghcr.io/${{ github.repository_owner }}/human-agent-collab-frontend
-          tags: |
-            type=ref,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push backend image
         uses: docker/build-push-action@v4
@@ -41,7 +38,7 @@ jobs:
           context: .
           file: ./backend.prod.Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags_with_flavor_for_ghcr_io_neuhai_human-agent-collab-backend }}
+          tags: ${{ steps.meta.outputs.images[0] }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Build and push frontend image
@@ -50,5 +47,5 @@ jobs:
           context: .
           file: ./frontend.prod.Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags_with_flavor_for_ghcr_io_neuhai_human-agent-collab-frontend }}
+          tags: ${{ steps.meta.outputs.images[1] }}
           labels: ${{ steps.meta.outputs.labels }}
