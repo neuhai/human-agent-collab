@@ -19,7 +19,88 @@ We present a configurable research platform for conducting Human-LLM agent colla
 - **Git**: For version control (recommended)
 - **uv**: Modern Python package manager (recommended)
 
-## Installation & Setup
+## Running with Docker
+
+This is the recommended way to run the platform. It ensures a consistent and stable environment for both production and development.
+
+### Prerequisites
+- **Docker & Docker Compose**: [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
+
+---
+
+### **Production Mode (Recommended for Users)**
+
+This mode runs the fully optimized, production-ready version of the application, served via Nginx. It's the easiest way to get the platform running.
+
+#### 1. Clone the Repository
+```bash
+git clone https://github.com/neuhai/human-agent-collab.git
+cd human-agent-collab
+```
+
+#### 2. Create Environment File
+Copy the production environment template. This file will hold your secret credentials.
+```bash
+cp .env.prod.template .env.prod
+```
+Now, edit the `.env.prod` file with a text editor and set the following values:
+- `POSTGRES_PASSWORD`: A secure password for the database.
+- `OPENAI_API_KEY`: Your OpenAI API key.
+- `JWT_SECRET`: A secure random string. You can generate one with `openssl rand -base64 32`.
+
+#### 3. Build and Run
+Use the automated deployment script to build and start all services.
+```bash
+# On Linux/macOS (you may need to make it executable first)
+chmod +x deploy-prod.sh
+./deploy-prod.sh
+
+# On Windows (using Git Bash or WSL)
+./deploy-prod.sh
+```
+
+#### 4. Access the Application
+Once the script finishes, the application will be available at:
+- **URL**: **http://localhost**
+
+To manage the services, you can use the same script with different commands:
+./deploy-prod.sh
+- View logs: `./deploy-prod.sh logs`
+Stop services: `./deploy-prod.sh stop`
+
+---
+
+### **Development Mode (for Developers)**
+
+This mode is for developers who want to work on the source code. It uses development servers with features like hot-reloading, and local source code is mounted into the containers.
+
+#### 1. Clone the Repository
+If you haven't already, clone the project.
+
+#### 2. Create Environment File
+Copy the development environment template.
+```bash
+cp .env.dev.template .env
+```
+Edit the `.env` file and set your `POSTGRES_PASSWORD` and `OPENAI_API_KEY`.
+
+#### 3. Build and Run
+Use `docker-compose` to build and start the services in the background.
+```bash
+docker-compose -f docker-compose.dev.yml up --build -d
+```
+
+#### 4. Access the Services
+- **Frontend (with hot-reload)**: **http://localhost:3000**
+- **Backend API**: **http://localhost:5002**
+
+For more detailed commands (viewing logs, accessing container shells, etc.), please refer to the `README.docker-dev.md` file.
+
+---
+
+## Manual Setup (Without Docker)
+
+This method is for setting up a local development environment on your machine without using Docker.
 
 ### 1. Quick Setup
 
@@ -36,35 +117,12 @@ cd human-agent-collab
 
 #### Step 2: Create Environment Configuration
 
-##### 1. Create .env file **in the backend** containing the following information:
+We have consolidated the environment templates for manual setup into a single file.
 
-```bash
-DATABASE_URL=postgresql://'username':@localhost:5432/shape_factory_research
-DATABASE_HOST=localhost
-DATABASE_PORT=5432
-DATABASE_NAME=Database name (default: shape_factory_research)
-DATABASE_USER=Your PostgreSQL username
-DATABASE_PASSWORD=Your PostgreSQL password  
-
-# OpenAI API Key
-OPENAI_API_KEY= Your OpenAI API key for AI functionality
-
-# WebSocket Configuration
-WS_PORT=8001
-
-AGENT_LLM_MODE=function
-```
-
-**Note**: Please make sure to enter your database name, username, password, and openai api key.
-
-**Important**: If you already have a postgresql database on your local machine, you can use the same username and password.
-
-##### 2. Create .env file **in the vue-app (frontend)** containing the following information:
-
-````bash
-VITE_BACKEND_URL=http://localhost:5002
-# You can update the backend URL
-````
+1.  Open the `.env.manual.template` file in the root directory.
+2.  Copy the `BACKEND CONFIGURATION` section into a new file at `backend/.env`.
+3.  Copy the `FRONTEND CONFIGURATION` section into a new file at `vue-app/.env`.
+4.  Fill in the required values (like database credentials and API keys) in both new `.env` files.
 
 #### Step 3: Run Automated Setup
 ```bash
@@ -87,9 +145,13 @@ The script will automatically:
 #### Step 4: Start the Application
 ```bash
 # Terminal 1 - Backend Server
-cd backend && python app.py
+# On Windows:
+source .venv/Scripts/activate  
+# On MacOS: source ../.venv/bin/activate
+cd backend
+python app.py
 
-# Terminal 2 - Frontend Development Server  
+# Terminal 2 - Frontend Development Server, from the project root
 cd vue-app && npm run dev
 ```
 
@@ -174,40 +236,17 @@ pip install -r backend/requirements-analysis.txt
 
 ##### Environment Configuration
 
-1. At backend, add the following configuration to your `.env` file:
+We have consolidated the environment templates for manual setup into a single file: `.env.manual.template`.
 
-```bash
-# Database Configuration
-DATABASE_URL=postgresql://your_username:your_password@localhost:5432/shape_factory_research
-DATABASE_HOST=localhost
-DATABASE_PORT=5432
-DATABASE_NAME=shape_factory_research
-DATABASE_USER=your_username
-DATABASE_PASSWORD=your_password
+1.  Open `.env.manual.template`.
+2.  Copy the `BACKEND CONFIGURATION` section into a new file at `backend/.env` and fill in your values.
+3.  Copy the `FRONTEND CONFIGURATION` section into a new file at `vue-app/.env`.
 
-# JWT Configuration
-JWT_SECRET=your-super-secret-jwt-key-change-in-production
-
-# OpenAI Configuration (for AI agents) - REQUIRED for AI functionality
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Server Configuration
-FLASK_ENV=development
-FLASK_DEBUG=True
-```
-
-**Note**: Replace the placeholder values with your actual database credentials and OpenAI API key. Without the `.env` file, the application will not start properly.
+**Note**: Replace the placeholder values with your actual database credentials and OpenAI API key. Without the `.env` files, the application will not start properly.
 
 #### 2.3 Frontend Setup
 
-At frontend, add the following configuration to your `.env` file:
-
-```bash
-VITE_BACKEND_URL=http://localhost:5002
-# You can update the backend URL
-```
-
-Then, run the following commands:
+After creating your `vue-app/.env` file, run the following commands:
 
 ```bash
 # Navigate to Vue app directory
@@ -218,10 +257,6 @@ npm install
 # or
 yarn install
 ```
-
-## Running Locally
-
-> **Tip**: If you used the automated setup script, you can skip to the "Start the Application" section below.
 
 ### Development Mode
 
@@ -251,12 +286,8 @@ The frontend will start on `http://localhost:3000`
 #### Common Problems and Solutions
 
 **1. ".env file not found" Error**
-```bash
-# Make sure you've created the .env file
-cp env.template .env
-# Edit the file with your actual values
-nano .env
-```
+- The automated script `setup.sh` expects `backend/.env` and `vue-app/.env` to exist.
+- Please follow the instructions in the "Manual Setup" section to create these files from the `.env.manual.template` before running the script.
 
 **2. "Missing required fields" Error**
 - Ensure all required fields are set in your `.env` file:

@@ -750,6 +750,28 @@ def get_agents_status(session_code: str) -> dict:
 # BASIC API ENDPOINTS
 # ============================================================================
 
+@app.route('/api/health')
+def health():
+    """Health check endpoint for Docker"""
+    try:
+        # Quick database health check
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.close()
+        return_db_connection(conn)
+        
+        return jsonify({
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 503
+
 @app.route('/api/hello')
 def hello():
     return jsonify({"message": "Hello from Shape Factory Backend!"})
@@ -6311,5 +6333,5 @@ if __name__ == '__main__':
     # run_migrations()
     # print("=" * 50)
     
-    socketio.run(app, host='0.0.0.0', port=5002, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5002, debug=True, allow_unsafe_werkzeug=True)
     
