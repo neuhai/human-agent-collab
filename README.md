@@ -1,17 +1,19 @@
 # A Configurable Research Platform for Human-LLM Agent Collaboration
 
-We present a configurable research platform for conducting Human-LLM agent collaboration experiments. The system supports multiple experiment paradigms, including ShapeFactory, DayTrader, EssayRanking, and WordGuessing, along with an Experiment Configuration Language (ECL) for custom experiment design.
+This repository present of a configurable research platform for conducting Human-LLM agent collaboration experiments from the paper **Through the Lens of Human-Human Collaboration: A Configurable Research Platform for Exploring Human-Agent Collaboration**.
+
+The system supports multiple experiment paradigms, including ShapeFactory, DayTrader, EssayRanking, and WordGuessing, along with an Experiment Configuration Language (ECL) for custom experiment design.
 
 ![image](https://github.com/neuhai/human-agent-collab/blob/main/preview.gif)
 
 ## Table of Contents
 
 - [System Requirements](#system-requirements)
-- [Installation & Setup](#installation--setup)
-- [Running Locally](#running-locally)
-- [Automated Setup Issues](#automated-setup-issues)
+- [Running with Docker](#running-with-docker)
 - [Customization](#customization)
 - [Development](#development)
+- [Trouble Shooting](#trouble-shooting)
+- [Citation](#citation)
 
 ## System Requirements
 - **Python**: 3.10 or higher
@@ -282,73 +284,6 @@ The frontend will start on `http://localhost:3000`
 
 
 
-
-### Automated Setup Issues
-
-#### Common Problems and Solutions
-
-**1. ".env file not found" Error**
-- The automated script `setup.sh` expects `backend/.env` and `vue-app/.env` to exist.
-- Please follow the instructions in the "Manual Setup" section to create these files from the `.env.manual.template` before running the script.
-
-**2. "Missing required fields" Error**
-- Ensure all required fields are set in your `.env` file:
-  - `DATABASE_USER`
-  - `DATABASE_PASSWORD` 
-  - `DATABASE_NAME`
-  - `OPENAI_API_KEY`
-- Make sure `OPENAI_API_KEY` is not the placeholder value
-
-**3. PostgreSQL Connection Issues**
-```bash
-# Check if PostgreSQL is running
-brew services list | grep postgresql  # macOS
-sudo systemctl status postgresql     # Linux
-
-# Start PostgreSQL if needed
-brew services start postgresql       # macOS
-sudo systemctl start postgresql      # Linux
-```
-
-**4. Permission Denied on setup.sh**
-```bash
-# Make the script executable
-chmod +x setup.sh
-```
-
-**5. Python/Node.js Version Issues**
-- Ensure you have Python 3.12+ and Node.js 20.19.0+
-- Use `python3 --version` and `node --version` to check
-
-**6. Database Already Exists**
-- The script will ask if you want to recreate the database
-- Choose 'y' to recreate or 'N' to use existing database
-
-### Manual Recovery Steps
-
-If the automated setup fails, you can complete the setup manually:
-
-```bash
-# 1. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# 2. Install Python dependencies
-pip install -r backend/requirements.txt
-
-# 3. Set up database manually
-psql -U postgres -c "CREATE DATABASE your_database_name;"
-psql -U your_username -d your_database_name -f backend/database/schema.sql
-
-# 4. Install frontend dependencies
-cd vue-app && npm install && cd ..
-
-# 5. Build frontend
-cd vue-app && npm run build && cd ..
-```
-
-
-
 ## Customization
 
 ### Custom Agents
@@ -615,4 +550,78 @@ def run_migration():
             ADD COLUMN new_field VARCHAR(50);
         """)
         conn.commit()
+```
+
+### Trouble Shooting
+
+#### Common Problems and Solutions
+
+**1. ".env file not found" Error**
+- The automated script `setup.sh` expects `backend/.env` and `vue-app/.env` to exist.
+- Please follow the instructions in the "Manual Setup" section to create these files from the `.env.manual.template` before running the script.
+
+**2. "Missing required fields" Error**
+- Ensure all required fields are set in your `.env` file:
+  - `DATABASE_USER`
+  - `DATABASE_PASSWORD` 
+  - `DATABASE_NAME`
+  - `OPENAI_API_KEY`
+- Make sure `OPENAI_API_KEY` is not the placeholder value
+
+**3. PostgreSQL Connection Issues**
+```bash
+# Check if PostgreSQL is running
+brew services list | grep postgresql  # macOS
+sudo systemctl status postgresql     # Linux
+
+# Start PostgreSQL if needed
+brew services start postgresql       # macOS
+sudo systemctl start postgresql      # Linux
+```
+
+**4. Permission Denied on setup.sh**
+```bash
+# Make the script executable
+chmod +x setup.sh
+```
+
+**5. Python/Node.js Version Issues**
+- Ensure you have Python 3.12+ and Node.js 20.19.0+
+- Use `python3 --version` and `node --version` to check
+
+**6. Database Already Exists**
+- The script will ask if you want to recreate the database
+- Choose 'y' to recreate or 'N' to use existing database
+
+### Manual Recovery Steps
+
+If the automated setup fails, you can complete the setup manually:
+
+```bash
+# 1. Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 2. Install Python dependencies
+pip install -r backend/requirements.txt
+
+# 3. Set up database manually
+psql -U postgres -c "CREATE DATABASE your_database_name;"
+psql -U your_username -d your_database_name -f backend/database/schema.sql
+
+# 4. Install frontend dependencies
+cd vue-app && npm install && cd ..
+
+# 5. Build frontend
+cd vue-app && npm run build && cd ..
+```
+
+## Citation
+```
+@article{yao2025through,
+  title={Through the Lens of Human-Human Collaboration: A Configurable Research Platform for Exploring Human-Agent Collaboration},
+  author={Yao, Bingsheng and Chen, Jiaju and Chen, Chaoran and Wang, April and Li, Toby Jia-jun and Wang, Dakuo},
+  journal={arXiv preprint arXiv:2509.18008},
+  year={2025}
+}
 ```
