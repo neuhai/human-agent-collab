@@ -666,6 +666,10 @@ CREATE TABLE public.participants (
     specialty_production_used integer DEFAULT 0,
     mbti_type character varying(4),
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    mturk_worker_id character varying(255) UNIQUE,
+    mturk_assignment_id character varying(255) UNIQUE,
+    mturk_hit_id character varying(255),
+    is_preview boolean DEFAULT false,
     current_rankings jsonb DEFAULT '[]'::jsonb,
     submitted_rankings_count integer DEFAULT 0,
     role character varying(20) DEFAULT NULL::character varying,
@@ -1080,6 +1084,47 @@ CREATE TABLE public.wordguessing_chat_history (
 
 
 --
+-- Name: mturk_tasks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mturk_tasks (
+    id integer NOT NULL,
+    hit_id character varying(255) NOT NULL,
+    session_id uuid,
+    environment character varying(20) NOT NULL,
+    status character varying(50) DEFAULT 'ASSOCIATED'::character varying NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+--
+-- Name: mturk_tasks_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.mturk_tasks_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: mturk_tasks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.mturk_tasks_id_seq OWNED BY public.mturk_tasks.id;
+
+
+--
+-- Name: mturk_tasks id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mturk_tasks ALTER COLUMN id SET DEFAULT nextval('public.mturk_tasks_id_seq'::regclass);
+
+
+--
 -- Name: TABLE wordguessing_chat_history; Type: COMMENT; Schema: public; Owner: -
 --
 
@@ -1324,6 +1369,22 @@ ALTER TABLE ONLY public.transactions
 
 ALTER TABLE ONLY public.wordguessing_chat_history
     ADD CONSTRAINT wordguessing_chat_history_pkey PRIMARY KEY (chat_id);
+
+
+--
+-- Name: mturk_tasks mturk_tasks_hit_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mturk_tasks
+    ADD CONSTRAINT mturk_tasks_hit_id_key UNIQUE (hit_id);
+
+
+--
+-- Name: mturk_tasks mturk_tasks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mturk_tasks
+    ADD CONSTRAINT mturk_tasks_pkey PRIMARY KEY (id);
 
 
 --
@@ -2020,6 +2081,13 @@ ALTER TABLE ONLY public.wordguessing_chat_history
 
 
 --
--- PostgreSQL database dump complete
+-- Name: mturk_tasks mturk_tasks_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
+ALTER TABLE ONLY public.mturk_tasks
+    ADD CONSTRAINT mturk_tasks_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(session_id) ON DELETE CASCADE;
+
+
+--
+-- PostgreSQL database dump complete
+--

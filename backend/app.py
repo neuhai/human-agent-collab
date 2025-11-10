@@ -32,6 +32,9 @@ from game_engine_factory import GameEngineFactory
 # Add Human Logger import
 from human_logger import get_human_logger, cleanup_human_logs, stop_human_logging_for_session
 
+# Import MTurk Service
+from mturk_service import mturk_service
+
 # Load environment variables
 load_dotenv()
 
@@ -3382,11 +3385,22 @@ def clear_daytrader_investments():
 
 @app.route('/api/participants/register', methods=['POST'])
 def register_human_participant():
-    """Register a human participant"""
+    """Register a human participant, handles normal and mTurk registration."""
     try:
         data = request.get_json()
         
-        participant_code = data.get('participant_code')
+        # mTurk parameters from URL query string
+        mturk_worker_id = request.args.get('workerId')
+        mturk_assignment_id = request.args.get('assignmentId')
+        mturk_hit_id = request.args.get('hitId')
+        is_mturk_preview = mturk_assignment_id == 'ASSIGNMENT_ID_NOT_AVAILABLE'
+
+        # If it's an mTurk worker, use their workerId as the participant_code
+        if mturk_worker_id:
+            participant_code = mturk_worker_id
+        else:
+            participant_code = data.get('participant_code')
+
         session_code = data.get('session_code')
         specialty_override = data.get('specialty_shape')  # Optional override
         tag = data.get('tag')  # Optional tag
@@ -3474,12 +3488,14 @@ def register_human_participant():
                 INSERT INTO participants 
                 (participant_id, session_id, participant_code, participant_type, 
                  color_shape_combination, specialty_shape, login_status, money, 
-                 is_agent, agent_type, agent_status, last_activity, session_code, tag, orders)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 is_agent, agent_type, agent_status, last_activity, session_code, tag, orders,
+                 mturk_worker_id, mturk_assignment_id, mturk_hit_id, is_preview)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 str(uuid.uuid4()), session_id, participant_code, 'human',
                 color_shape_combination, specialty_shape, 'not_logged_in', get_session_config(session_code).get('startingMoney', 300),
-                False, None, 'inactive', datetime.now(timezone.utc), session_code, tag, orders_json
+                False, None, 'inactive', datetime.now(timezone.utc), session_code, tag, orders_json,
+                mturk_worker_id, mturk_assignment_id, mturk_hit_id, is_mturk_preview
             ))
         elif experiment_type == 'essayranking':
             # For essay ranking experiments, use essay-specific fields
@@ -6322,6 +6338,89 @@ def assign_wordguessing_roles():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ============================================================================
+# MTURK INTEGRATION API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/mturk/sessions/<session_code>/associate', methods=['POST'])
+def associate_mturk_hit(session_code):
+    """Associate an external mTurk HIT with a session."""
+    data = request.get_json()
+    hit_id = data.get('hit_id')
+    environment = data.get('environment')
+
+    if not hit_id or not environment:
+        return jsonify({'error': 'hit_id and environment are required'}), 400
+
+    try:
+        with DatabaseConnection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT session_id FROM sessions WHERE session_code = %s", (session_code,))
+                session = cur.fetchone()
+                if not session:
+                    return jsonify({'error': 'Session not found'}), 404
+                
+                session_id = session['session_id']
+                
+                cur.execute(
+                    """
+                    INSERT INTO mturk_tasks (hit_id, session_id, environment)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (hit_id) DO UPDATE SET session_id = EXCLUDED.session_id;
+                    """,
+                    (hit_id, session_id, environment)
+                )
+                conn.commit()
+        return jsonify({'success': True, 'message': f'HIT {hit_id} associated with session {session_code}.'})
+    except Exception as e:
+        logger.error(f"Error associating HIT: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/mturk/sessions/<session_code>/assignments', methods=['GET'])
+def get_mturk_assignments(session_code):
+    """Get all assignments for a session's associated HIT."""
+    try:
+        with DatabaseConnection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT hit_id FROM mturk_tasks WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s)", (session_code,))
+                task = cur.fetchone()
+                if not task:
+                    return jsonify({'error': 'No mTurk HIT associated with this session'}), 404
+                hit_id = task['hit_id']
+
+        assignments = mturk_service.list_assignments_for_hit(hit_id)
+        # Here you could enrich the assignments with data from your local `participants` table
+        return jsonify({'success': True, 'assignments': assignments})
+    except Exception as e:
+        logger.error(f"Error getting assignments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/mturk/assignments/<assignment_id>/approve', methods=['POST'])
+def approve_mturk_assignment(assignment_id):
+    """Approve an mTurk assignment."""
+    data = request.get_json() or {}
+    feedback = data.get('feedback', 'Thank you for your work!')
+    
+    success = mturk_service.approve_assignment(assignment_id, feedback)
+    if success:
+        return jsonify({'success': True, 'message': f'Assignment {assignment_id} approved.'})
+    else:
+        return jsonify({'error': f'Failed to approve assignment {assignment_id}.'}), 500
+
+@app.route('/api/mturk/assignments/<assignment_id>/reject', methods=['POST'])
+def reject_mturk_assignment(assignment_id):
+    """Reject an mTurk assignment."""
+    data = request.get_json()
+    reason = data.get('reason')
+    if not reason:
+        return jsonify({'error': 'A reason is required to reject an assignment.'}), 400
+
+    success = mturk_service.reject_assignment(assignment_id, reason)
+    if success:
+        return jsonify({'success': True, 'message': f'Assignment {assignment_id} rejected.'})
+    else:
+        return jsonify({'error': f'Failed to reject assignment {assignment_id}.'}), 500
+
 if __name__ == '__main__':
     print("🚀 Starting Shape Factory Backend...")
     print("📡 MCP System: Integrated")
@@ -6334,4 +6433,3 @@ if __name__ == '__main__':
     # print("=" * 50)
     
     socketio.run(app, host='0.0.0.0', port=5002, debug=True, allow_unsafe_werkzeug=True)
-    

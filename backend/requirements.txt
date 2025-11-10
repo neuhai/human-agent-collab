@@ -38,3 +38,4 @@ gunicorn>=21.2.0
 
 # Additional utilities
 Werkzeug>=2.3.0
+boto3>=1.34.0

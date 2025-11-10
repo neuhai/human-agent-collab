@@ -84,6 +84,10 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       FLASK_ENV: production
       PYTHONUNBUFFERED: 1
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      MTURK_REGION_NAME: ${MTURK_REGION_NAME}
+      MTURK_ENVIRONMENT: ${MTURK_ENVIRONMENT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,6 +129,13 @@ OPENAI_API_KEY=CHANGE_ME_sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # A secure random string for JWT. You can generate one with: openssl rand -base64 32
 JWT_SECRET=CHANGE_ME_TO_A_RANDOM_SECRET_STRING
+
+# --- AWS Configuration (for mTurk Integration) ---
+# Optional: Fill these in if you plan to use the mTurk integration.
+AWS_ACCESS_KEY_ID=CHANGE_ME_YOUR_AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY=CHANGE_ME_YOUR_AWS_SECRET_ACCESS_KEY
+MTURK_REGION_NAME=us-east-1
+MTURK_ENVIRONMENT=sandbox # Use 'sandbox' for testing, 'production' for live HITs
 EOF
 echo "-> .env created."
 echo "✅ Configuration files generated successfully."

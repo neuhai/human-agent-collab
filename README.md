@@ -89,6 +89,18 @@ If you prefer a graphical interface, you can manage the application directly fro
 
 ---
 
+## Deployment for MTurk Integration
+
+To use this platform for your research, you will need to deploy it to a publicly accessible URL to connect with Amazon Mechanical Turk (MTurk). We provide two recommended deployment options:
+
+*   **Cloud-based Deployment:** For a scalable and robust setup, we recommend deploying the application to a cloud provider like Google Cloud Run or Azure Container Apps using the Docker Offload strategy.
+*   **Local Deployment:** For development and testing, you can run the application on your local machine and expose it to the internet using ngrok.
+
+Detailed tutorials for both deployment options are available in the `user_tutorial/` directory. Please refer to these guides for step-by-step instructions:
+
+*   [Cloud Deployment Tutorial](./user_tutorial/run_on_cloud.md)
+*   [Local Deployment Tutorial](./user_tutorial/run_locally.md)
+
 ## Developer Guide: Running from Source
 
 This section is for developers who want to contribute to the project.
