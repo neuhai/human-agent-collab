@@ -17,11 +17,23 @@ The system supports multiple experiment paradigms, including ShapeFactory, DayTr
 
 ## Quickest Start for Users
 
-This method is for users who just want to run the application. It uses a one-line command to automatically set up all necessary configuration files.
+This method is for users who just want to quickly download and run the application using Docker.  
+It uses a one-line command to automatically set up all necessary configuration files and Docker images.
+
+> ⚠️ **Important:**  
+> The quick start only prepares and runs the application locally.  
+> To **deploy the application for real experiments (e.g., with MTurk)**, you will need to choose one of the deployment options:
+>
+> - **Cloud deployment** (recommended for long-running / larger studies):  
+>   see [`/user_tutorial/run_on_cloud.md`](./user_tutorial/run_on_cloud.md)
+> - **Local deployment with ngrok** (for development / small-scale tests):  
+>   see [`/user_tutorial/run_locally.md`](./user_tutorial/run_locally.md)
 
 **Prerequisites:**
-- Docker Desktop installed.
+- Docker Desktop installed and running.
 - A command-line terminal (like Terminal on macOS/Linux or PowerShell/WSL on Windows).
+
+---
 
 ### One-Line Setup Command
 
@@ -30,62 +42,25 @@ Copy and paste the command for your operating system into a terminal and press E
 **For macOS or Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/neuhai/human-agent-collab/main/deployment/quick-start.sh | bash
-```
+````
 
 **For Windows (in PowerShell):**
+
 ```powershell
 irm https://raw.githubusercontent.com/neuhai/human-agent-collab/main/deployment/quick-start.ps1 | iex
 ```
 
-This command will automatically set up all necessary files and guide you through the next steps.
+This command will:
 
-### Managing the Application
+* Download the latest version of the application,
+* Create a folder named `human-agent-collab-app`,
+* Generate configuration files (including `.env`), and
+* Pull the required Docker images.
 
-After the initial setup, you can easily start, stop, and manage the application. You can use either the command line or the Docker Desktop graphical interface.
+After this, you can:
 
----
-#### **Option 1: Using the Command Line**
-
-Navigate into the `human-agent-collab-app` directory in your terminal and use the following commands.
-
-**To Start the Application:**
-If the application is stopped, restart it with:
-```bash
-docker compose up -d
-```
-*(Note: On older systems, you might need to use `docker-compose` instead of `docker compose`)*
-
-**To Stop the Application:**
-To stop all running services, use:
-```bash
-docker compose down
-```
-This command will stop and remove the containers, but **your database data will be preserved**.
-
-**To Update to the Latest Version:**
-To pull the newest versions of the application images from the registry, run:
-```bash
-docker compose pull
-```
-After updating, you can start the application again with `docker compose up -d`.
-
----
-#### **Option 2: Using Docker Desktop (GUI)**
-
-If you prefer a graphical interface, you can manage the application directly from Docker Desktop.
-
-1.  **Open Docker Desktop.**
-2.  Go to the **"Containers"** section in the left sidebar.
-3.  You will see a container group (also called a "Compose stack") named **`human-agent-collab-app`**. This group contains the three services: `frontend`, `backend`, and `postgres`.
-
-**To Stop the Application:**
-- Click the **stop button** (■) next to the `human-agent-collab-app` group.
-
-**To Start the Application:**
-- Click the **start button** (▶) next to the `human-agent-collab-app` group.
-
-**To Delete the Application:**
-- Click the **delete button** (🗑️) to stop and remove the containers. This is equivalent to the `docker compose down` command and **will not delete your data**.
+* Run the app locally for testing (see “Managing the Application” below), and
+* Follow `/user_tutorial/run_on_cloud.md` or `run_locally.md` to deploy it for real users/MTurk.
 
 ---
 
