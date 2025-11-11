@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
+# Create a non-root user
+RUN useradd -ms /bin/bash vscode && chown -R vscode:vscode /app
+
 # Copy requirements first for better caching
 COPY backend/requirements.txt .
 

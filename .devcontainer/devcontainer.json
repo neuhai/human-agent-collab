@@ -26,5 +26,5 @@
 
     "forwardPorts": [5002, 3000],
     "postCreateCommand": "uv sync",
-    "remoteUser": "root"
+    "remoteUser": "vscode"
 }
