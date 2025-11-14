@@ -34,56 +34,115 @@ except Exception:
     OPENAI_AVAILABLE = False
 
 
+# Optional: Anthropic (Claude) interface
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except Exception:
+    ANTHROPIC_AVAILABLE = False
+
+
 class LLMPolicy:
-    """Thin wrapper around OpenAI; can return tool-calls (when tools are passed) or raw text (JSON plan) when not."""
+    """Thin wrapper around OpenAI or Anthropic; can return tool-calls or raw text."""
 
     def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None):
-        if not OPENAI_AVAILABLE:
-            raise RuntimeError("OpenAI SDK not available. Install openai >= 1.0 or set a simple policy.")
-        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        openai_key = api_key or os.getenv("OPENAI_API_KEY")
+        claude_key = os.getenv("CLAUDE_API_KEY")
+
+        if openai_key and OPENAI_AVAILABLE:
+            self.client = OpenAI(api_key=openai_key)
+            self.api_provider = "openai"
+        elif claude_key and ANTHROPIC_AVAILABLE:
+            self.client = Anthropic(api_key=claude_key)
+            self.api_provider = "anthropic"
+        else:
+            raise RuntimeError("No suitable LLM SDK or API key available. Install openai/anthropic or set OPENAI_API_KEY/CLAUDE_API_KEY.")
+        
         self.model = model
 
     async def decide(self, system_prompt: str, user_message: str, tools_spec: Optional[List[Dict[str, Any]]] = None):
         """If tools_spec is provided: return list of tool-calls. Otherwise return response text (e.g., JSON plan)."""
         def _call_sync():
-            kwargs = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                "temperature": 0.4,
-            }
-            if tools_spec:
-                kwargs["tools"] = tools_spec
-                kwargs["tool_choice"] = "auto"
             try:
-                resp = self.client.chat.completions.create(**kwargs)
-                message = resp.choices[0].message
-                if tools_spec:
-                    calls = []
-                    if message.tool_calls:
-                        for tc in message.tool_calls:
-                            try:
-                                args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
-                            except Exception:
-                                args = {}
-                            calls.append({"name": tc.function.name, "arguments": args})
-                    return calls
+                if self.api_provider == "openai":
+                    kwargs = {
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                        "temperature": 0.4,
+                    }
+                    if tools_spec:
+                        kwargs["tools"] = tools_spec
+                        kwargs["tool_choice"] = "auto"
+                    
+                    resp = self.client.chat.completions.create(**kwargs)
+                    message = resp.choices[0].message
+                    if tools_spec:
+                        calls = []
+                        if message.tool_calls:
+                            for tc in message.tool_calls:
+                                try:
+                                    args = json.loads(tc.function.arguments) if isinstance(tc.function.arguments, str) else tc.function.arguments
+                                except Exception:
+                                    args = {}
+                                calls.append({"name": tc.function.name, "arguments": args})
+                        return calls
+                    else:
+                        return message.content or ""
+
+                elif self.api_provider == "anthropic":
+                    kwargs = {
+                        "model": self.model,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_message}],
+                        "max_tokens": 1024,
+                        "temperature": 0.4,
+                    }
+                    if tools_spec:
+                        kwargs["tools"] = tools_spec
+                    
+                    resp = self.client.messages.create(**kwargs)
+                    if tools_spec:
+                        calls = []
+                        for block in resp.content:
+                            if block.type == 'tool_use':
+                                try:
+                                    args = block.input if isinstance(block.input, dict) else {}
+                                except Exception:
+                                    args = {}
+                                calls.append({"name": block.name, "arguments": args})
+                        return calls
+                    else:
+                        text_content = ""
+                        for block in resp.content:
+                            if block.type == 'text':
+                                text_content += block.text
+                        return text_content
                 else:
-                    return message.content or ""
+                    return {"__llm_error__": "Unknown API provider"}
             except Exception as e:
                 return {"__llm_error__": str(e)}
         return await asyncio.to_thread(_call_sync)
 
 
 class MemoryAwareLLMPolicy:
-    """LLM policy with memory management - maintains conversation history and context."""
+    """LLM policy with memory management - supports OpenAI and Anthropic."""
     
     def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None, max_memory_length: int = 20, participant_code: str = "unknown", session_id: Optional[str] = None, session_code: Optional[str] = None):
-        if not OPENAI_AVAILABLE:
-            raise RuntimeError("OpenAI SDK not available. Install openai >= 1.0 or set a simple policy.")
-        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        openai_key = api_key or os.getenv("OPENAI_API_KEY")
+        claude_key = os.getenv("CLAUDE_API_KEY")
+
+        if openai_key and OPENAI_AVAILABLE:
+            self.client = OpenAI(api_key=openai_key)
+            self.api_provider = "openai"
+        elif claude_key and ANTHROPIC_AVAILABLE:
+            self.client = Anthropic(api_key=claude_key)
+            self.api_provider = "anthropic"
+        else:
+            raise RuntimeError("No suitable LLM SDK or API key available for MemoryAwareLLMPolicy.")
+
         self.model = model
         self.max_memory_length = max_memory_length
         self.participant_code = participant_code
@@ -173,13 +232,6 @@ class MemoryAwareLLMPolicy:
             messages = [{"role": "system", "content": self.system_prompt}]
             messages.extend(self.conversation_history)
             
-            # Use JSON format instead of function calling
-            kwargs = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0.4,
-            }
-            
             # Log the request to LLM log
             self._log_llm("MEMORY_LLM_REQUEST", json.dumps({
                 "model": self.model,
@@ -188,11 +240,33 @@ class MemoryAwareLLMPolicy:
             }, ensure_ascii=False, indent=2))
             
             try:
-                resp = self.client.chat.completions.create(**kwargs)
-                message = resp.choices[0].message
-                
+                if self.api_provider == "openai":
+                    kwargs = {
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": 0.4,
+                    }
+                    resp = self.client.chat.completions.create(**kwargs)
+                    response_content = resp.choices[0].message.content or ""
+                elif self.api_provider == "anthropic":
+                    # Anthropic separates system prompt from messages
+                    anthropic_messages = [msg for msg in messages if msg['role'] != 'system']
+                    kwargs = {
+                        "model": self.model,
+                        "system": self.system_prompt,
+                        "messages": anthropic_messages,
+                        "max_tokens": 1024,
+                        "temperature": 0.4,
+                    }
+                    resp = self.client.messages.create(**kwargs)
+                    response_content = ""
+                    for block in resp.content:
+                        if block.type == 'text':
+                            response_content += block.text
+                else:
+                    raise RuntimeError("Unknown API provider")
+
                 # Log the response to LLM log
-                response_content = message.content or ""
                 try:
                     # Try to parse the JSON response for better logging
                     if response_content.strip().startswith('{'):
@@ -493,18 +567,22 @@ class AgentController:
         # Initialize policy
         print(f"[INIT] Initializing policy (use_llm={use_llm}, use_memory={use_memory})...")
         if use_llm:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                print(f"[INIT WARNING] OPENAI_API_KEY not set - LLM may fail!")
-            else:
-                print(f"[INIT] OPENAI_API_KEY found: {api_key[:10]}...{api_key[-4:]}")
+            openai_key = os.getenv("OPENAI_API_KEY")
+            claude_key = os.getenv("CLAUDE_API_KEY")
             
+            if not openai_key and not claude_key:
+                print(f"[INIT WARNING] Neither OPENAI_API_KEY nor CLAUDE_API_KEY are set - LLM will fail!")
+            elif openai_key:
+                print(f"[INIT] OPENAI_API_KEY found: {openai_key[:10]}...{openai_key[-4:]}")
+            elif claude_key:
+                print(f"[INIT] CLAUDE_API_KEY found.")
+
             if use_memory:
                 print(f"[INIT] Using MemoryAwareLLMPolicy with max_memory_length={max_memory_length}")
-                self.policy = MemoryAwareLLMPolicy(model=llm_model, api_key=api_key, max_memory_length=max_memory_length, participant_code=self.participant_code, session_id=self.session_id, session_code=self.session_code)
+                self.policy = MemoryAwareLLMPolicy(model=llm_model, max_memory_length=max_memory_length, participant_code=self.participant_code, session_id=self.session_id, session_code=self.session_code)
             else:
                 print(f"[INIT] Using standard LLMPolicy")
-                self.policy = LLMPolicy(model=llm_model, api_key=api_key)
+                self.policy = LLMPolicy(model=llm_model)
         else:
             self.policy = SimplePolicy()
         print(f"[INIT] Policy initialized: {type(self.policy).__name__}")
@@ -2913,7 +2991,7 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                         self._mark_messages_as_read(message_ids)
                 
                 if self.llm_mode == "function":
-                    tools_spec = self.tools.get_openai_tools_spec()
+                    tools_spec = self.tools.get_tools_spec(self.policy.api_provider)
                     fc_system = "You are an autonomous trading agent. Use tools to act; no extra text."
                     self._log_llm("FN_CALLING_PROMPT", prompt)
                     
@@ -2966,7 +3044,7 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                     except Exception:
                         self._log_llm("PARSED_PLAN", str(plan))
                     if not plan or not isinstance(plan, dict):
-                        tools_spec = self.tools.get_openai_tools_spec()
+                        tools_spec = self.tools.get_tools_spec(self.policy.api_provider)
                         fc_system = "You are an autonomous trading agent. Use tools to act; no extra text."
                         self._log_llm("FALLBACK_FN_CALLING_PROMPT", prompt)
                         result = await self.policy.decide(fc_system, prompt, tools_spec=tools_spec)
@@ -3280,4 +3358,4 @@ if __name__ == "__main__":
                 session_code=args.session_code,
                 experiment_type=args.experiment_type,
         )
-    ) 
+    )

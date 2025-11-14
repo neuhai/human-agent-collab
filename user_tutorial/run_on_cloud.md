@@ -17,7 +17,6 @@ Before you begin, make sure you have the following:
 * **Container Registry**
   A container registry to host your Docker images, such as:
 
-  * [Docker Hub](https://hub.docker.com/)
   * [Google Container Registry / Artifact Registry](https://cloud.google.com/container-registry)
   * [Azure Container Registry](https://azure.microsoft.com/en-us/services/container-registry/)
 
@@ -58,7 +57,6 @@ Before you begin, make sure you have the following:
 
    Examples:
 
-   * Docker Hub: `docker login`
    * GCP: `docker login gcr.io`
    * Azure: `docker login <your_registry_name>.azurecr.io`
 

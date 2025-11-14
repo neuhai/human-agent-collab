@@ -779,6 +779,14 @@ def health():
 def hello():
     return jsonify({"message": "Hello from Shape Factory Backend!"})
 
+@app.route('/api/check-api-keys')
+def check_api_keys():
+    """Check if API keys are present"""
+    openai_key = os.getenv("OPENAI_API_KEY")
+    claude_key = os.getenv("CLAUDE_API_KEY")
+    keys_present = bool(openai_key or claude_key)
+    return jsonify({"keys_present": keys_present})
+
 @app.route('/api/data')
 def get_data():
     """Get basic data for testing"""
