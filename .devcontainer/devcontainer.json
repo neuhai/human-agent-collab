@@ -1,0 +1,30 @@
+{
+    "name": "Human-Agent Collab Dev Container",
+    "dockerComposeFile": "../deployment/docker-compose.dev.yml",
+    "service": "backend",
+    "workspaceFolder": "/app",
+
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "python.linting.pylintEnabled": true,
+                "python.linting.enabled": true,
+                "editor.formatOnSave": true,
+                "python.formatting.provider": "autopep8"
+            },
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "vue.volar",
+                "dbaeumer.vscode-eslint",
+                "esbenp.prettier-vscode",
+                "mutantdino.resourcemonitor"
+            ]
+        }
+    },
+
+    "forwardPorts": [5002, 3000],
+    "postCreateCommand": "uv sync",
+    "remoteUser": "vscode"
+}

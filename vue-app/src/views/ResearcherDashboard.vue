@@ -1183,6 +1183,18 @@
                     </div>
                   </div>
                 </div>
+              <!-- Tab 6: MTurk Integration -->
+              <div v-if="setupTabs.mturkIntegration" class="setup-tab-panel" :class="{ active: activeSetupTab === 'mturkIntegration' }" data-tab-id="mturkIntegration">
+                <div class="workflow-step">
+                  <div class="step-content">
+                    <div class="step-title-row">
+                      <div class="step-title">MTurk Integration</div>
+                    </div>
+                    <MTurkPanel :session-code="currentSessionCode" />
+                  </div>
+                </div>
+              </div>
+                </div>
           </div>
         </div>
         <!-- Column 2: Monitor Participants / Analysis Behavioral Logs -->
@@ -2065,8 +2077,6 @@
       </div>
     </div>
 
-
-    </div>
   
   <!-- Tooltip for timeline chart -->
   <div 
@@ -2085,6 +2095,7 @@ import { useRouter } from 'vue-router'
 import ParticipantsList from '@/components/ParticipantsList.vue'
 import TradesFeed from '@/components/TradesFeed.vue'
 import ConversationView from '@/components/ConversationView.vue'
+import MTurkPanel from '@/components/MTurkPanel.vue'
 import { BACKEND_URL } from '@/config.js'
 // @ts-ignore
 import io from 'socket.io-client'
@@ -3037,6 +3048,7 @@ const proceedToInteractionVariables = () => {
 
 const proceedToParticipantRegistration = () => {
   activeSetupTab.value = 'participantRegistration'
+  setupTabs.value.mturkIntegration = true
   scrollToLatestTab()
 }
 
@@ -4016,7 +4028,8 @@ const setupTabs = ref({
   experimentSelection: false,  // Appears when user chooses create session
   parameters: false,          // Appears when experiment is selected
   interactionVariables: false, // Appears when parameters are configured
-  participantRegistration: false // Appears when interaction variables are set
+  participantRegistration: false, // Appears when interaction variables are set
+  mturkIntegration: false
 })
 
 // Current active tab
@@ -4028,7 +4041,8 @@ const setupWorkflowSteps = ref([
   { id: 'experimentSelection', label: 'Experiment Selection' },
   { id: 'parameters', label: 'Parameters' },
   { id: 'interactionVariables', label: 'Interaction Controls' },
-  { id: 'participantRegistration', label: 'Participant Registration' }
+  { id: 'participantRegistration', label: 'Participant Registration' },
+  { id: 'mturkIntegration', label: 'MTurk Integration' }
 ])
 
 // Watch for active tab changes to load statistics when analysis tab is selected
@@ -13180,4 +13194,4 @@ const renderMessagesBarChart = () => {
   font-size: 12px;
   line-height: 1;
 }
-</style> 
+</style>

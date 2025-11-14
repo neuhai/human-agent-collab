@@ -1,7 +1,7 @@
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:18-alpine
+    image: postgres:16-alpine
     container_name: human-agent-postgres
     environment:
       POSTGRES_USER: postgres
@@ -11,7 +11,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../backend/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -23,8 +23,8 @@ services:
   # Backend API
   backend:
     build:
-      context: .
-      dockerfile: backend.dev.Dockerfile
+      context: ..
+      dockerfile: ./deployment/backend.dev.Dockerfile
     container_name: human-agent-backend
     environment:
       # Database
@@ -56,7 +56,7 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ../backend:/app
     networks:
       - app-network
     restart: unless-stopped
@@ -64,8 +64,8 @@ services:
   # Frontend
   frontend:
     build:
-      context: .
-      dockerfile: frontend.dev.Dockerfile
+      context: ..
+      dockerfile: ./deployment/frontend.dev.Dockerfile
     container_name: human-agent-frontend
     environment:
       VITE_BACKEND_URL: http://backend:5002
@@ -74,7 +74,7 @@ services:
     depends_on:
       - backend
     volumes:
-      - ./vue-app:/app
+      - ../vue-app:/app
       - /app/node_modules
     networks:
       - app-network

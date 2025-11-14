@@ -27,10 +27,10 @@ Edit .env and add your credentials
 
 ```bash
 # Build and start all services
-docker-compose up --build
+docker-compose -f deployment/docker-compose.dev.yml up --build
 
 # Or run in detached mode (background)
-docker-compose up -d --build
+docker-compose -f deployment/docker-compose.dev.yml up -d --build
 ```
 
 ### 3. Access the Application
@@ -54,60 +54,60 @@ Once all services are running:
 ### Start Services
 ```bash
 # Start all services
-docker-compose up
+docker-compose -f deployment/docker-compose.dev.yml up
 
 # Start in background
-docker-compose up -d
+docker-compose -f deployment/docker-compose.dev.yml up -d
 
 # Start specific service
-docker-compose up backend
+docker-compose -f deployment/docker-compose.dev.yml up backend
 ```
 
 ### Stop Services
 ```bash
 # Stop all services
-docker-compose down
+docker-compose -f deployment/docker-compose.dev.yml down
 
 # Stop and remove volumes (WARNING: deletes database data)
-docker-compose down -v
+docker-compose -f deployment/docker-compose.dev.yml down -v
 ```
 
 ### View Logs
 ```bash
 # View all logs
-docker-compose logs
+docker-compose -f deployment/docker-compose.dev.yml logs
 
 # Follow logs in real-time
-docker-compose logs -f
+docker-compose -f deployment/docker-compose.dev.yml logs -f
 
 # View logs for specific service
-docker-compose logs -f backend
-docker-compose logs -f frontend
-docker-compose logs -f postgres
+docker-compose -f deployment/docker-compose.dev.yml logs -f backend
+docker-compose -f deployment/docker-compose.dev.yml logs -f frontend
+docker-compose -f deployment/docker-compose.dev.yml logs -f postgres
 ```
 
 ### Rebuild Services
 ```bash
 # Rebuild all services
-docker-compose build
+docker-compose -f deployment/docker-compose.dev.yml build
 
 # Rebuild specific service
-docker-compose build backend
+docker-compose -f deployment/docker-compose.dev.yml build backend
 
 # Rebuild and restart
-docker-compose up --build
+docker-compose -f deployment/docker-compose.dev.yml up --build
 ```
 
 ### Execute Commands in Containers
 ```bash
 # Access backend shell
-docker-compose exec backend bash
+docker-compose -f deployment/docker-compose.dev.yml exec backend bash
 
 # Access PostgreSQL CLI
-docker-compose exec postgres psql -U postgres -d shape_factory_research
+docker-compose -f deployment/docker-compose.dev.yml exec postgres psql -U postgres -d shape_factory_research
 
 # Run Python script in backend
-docker-compose exec backend python migrate.py
+docker-compose -f deployment/docker-compose.dev.yml exec backend python migrate.py
 ```
 
 ## Database Management
@@ -120,7 +120,7 @@ The database schema is automatically initialized on first startup from `backend/
 
 ```bash
 # Connect to PostgreSQL
-docker-compose exec postgres psql -U postgres
+docker-compose -f deployment/docker-compose.dev.yml exec postgres psql -U postgres
 
 # Inside PostgreSQL shell:
 \c shape_factory_research  # Connect to database
@@ -132,20 +132,20 @@ docker-compose exec postgres psql -U postgres
 
 ```bash
 # Stop services and remove volumes
-docker-compose down -v
+docker-compose -f deployment/docker-compose.dev.yml down -v
 
 # Start again (will reinitialize database)
-docker-compose up
+docker-compose -f deployment/docker-compose.dev.yml up
 ```
 
 ### Backup Database
 
 ```bash
 # Create backup
-docker-compose exec postgres pg_dump -U postgres shape_factory_research > backup.sql
+docker-compose -f deployment/docker-compose.dev.yml exec postgres pg_dump -U postgres shape_factory_research > backup.sql
 
 # Restore from backup
-docker-compose exec -T postgres psql -U postgres shape_factory_research < backup.sql
+docker-compose -f deployment/docker-compose.dev.yml exec -T postgres psql -U postgres shape_factory_research < backup.sql
 ```
 
 ## Development Workflow
@@ -162,19 +162,19 @@ Both frontend and backend support hot reload:
 **Backend:**
 ```bash
 # Add package to requirements.txt, then:
-docker-compose exec backend pip install -r requirements.txt
+docker-compose -f deployment/docker-compose.dev.yml exec backend pip install -r requirements.txt
 
 # Or install directly:
-docker-compose exec backend pip install package-name
+docker-compose -f deployment/docker-compose.dev.yml exec backend pip install package-name
 ```
 
 **Frontend:**
 ```bash
 # Add package to package.json, then:
-docker-compose exec frontend npm install
+docker-compose -f deployment/docker-compose.dev.yml exec frontend npm install
 
 # Or install directly:
-docker-compose exec frontend npm install package-name
+docker-compose -f deployment/docker-compose.dev.yml exec frontend npm install package-name
 ```
 
 ## Troubleshooting
@@ -196,25 +196,25 @@ docker-compose exec frontend npm install package-name
 
 2. **Check Docker logs:**
    ```bash
-   docker-compose logs
+   docker-compose -f deployment/docker-compose.dev.yml logs
    ```
 
 3. **Restart Docker Desktop:**
    - Close Docker Desktop completely
    - Start it again
-   - Run `docker-compose up --build`
+   - Run `docker-compose -f deployment/docker-compose.dev.yml up --build`
 
 ### Database Connection Errors
 
 ```bash
 # Check if PostgreSQL is healthy
-docker-compose ps
+docker-compose -f deployment/docker-compose.dev.yml ps
 
 # View PostgreSQL logs
-docker-compose logs postgres
+docker-compose -f deployment/docker-compose.dev.yml logs postgres
 
 # Manually test connection
-docker-compose exec postgres psql -U postgres -c "SELECT 1"
+docker-compose -f deployment/docker-compose.dev.yml exec postgres psql -U postgres -c "SELECT 1"
 ```
 
 ### Backend Can't Connect to Database
@@ -222,11 +222,11 @@ docker-compose exec postgres psql -U postgres -c "SELECT 1"
 1. Ensure `.env` file has correct `POSTGRES_PASSWORD`
 2. Check if postgres service is healthy:
    ```bash
-   docker-compose ps postgres
+   docker-compose -f deployment/docker-compose.dev.yml ps postgres
    ```
 3. Restart backend:
    ```bash
-   docker-compose restart backend
+   docker-compose -f deployment/docker-compose.dev.yml restart backend
    ```
 
 ### Frontend Can't Connect to Backend
@@ -238,7 +238,7 @@ docker-compose exec postgres psql -U postgres -c "SELECT 1"
    ```
 3. Restart frontend:
    ```bash
-   docker-compose restart frontend
+   docker-compose -f deployment/docker-compose.dev.yml restart frontend
    ```
 
 ### Permission Errors (Linux)
@@ -284,16 +284,16 @@ services:
 
 ```bash
 # Stop and remove containers, networks
-docker-compose down
+docker-compose -f deployment/docker-compose.dev.yml down
 
 # Remove volumes (WARNING: deletes all data)
-docker-compose down -v
+docker-compose -f deployment/docker-compose.dev.yml down -v
 
 # Remove images
-docker-compose down --rmi all
+docker-compose -f deployment/docker-compose.dev.yml down --rmi all
 
 # Complete cleanup
-docker-compose down -v --rmi all --remove-orphans
+docker-compose -f deployment/docker-compose.dev.yml down -v --rmi all --remove-orphans
 ```
 
 ### Free Up Disk Space
@@ -322,7 +322,7 @@ docker system prune -a --volumes
 ## Support
 
 For issues or questions:
-1. Check logs: `docker-compose logs -f`
-2. Verify all services are healthy: `docker-compose ps`
+1. Check logs: `docker-compose -f deployment/docker-compose.dev.yml logs -f`
+2. Verify all services are healthy: `docker-compose -f deployment/docker-compose.dev.yml ps`
 3. Consult main README.md
 4. Check Docker Desktop status

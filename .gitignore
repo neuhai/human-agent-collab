@@ -331,3 +331,4 @@ setup_and_run.sh
 
 
 backend/.env
+remoteContainer.log

@@ -935,256 +935,238 @@ class AgentTools:
                 "error": f"Failed to mark messages as read: {str(e)}"
             }
 
-    # --------- OpenAI-style tool schema for function calling ---------
+    # --------- Tool schema generation for LLMs ---------
 
-    def get_openai_tools_spec(self) -> List[Dict[str, Any]]:
-        """Return OpenAI function-calling tool specification for these tools."""
+    def get_tools_spec(self, api_provider: str = 'openai') -> List[Dict[str, Any]]:
+        """Return tool specification in the format required by the specified API provider."""
+        base_tools = [
+            {
+                "name": "get_game_state",
+                "description": "Get current game state including private (money, inventory, orders) and public (round, time, others).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"}
+                    },
+                    "required": ["participant_code"],
+                },
+            },
+            {
+                "name": "send_message",
+                "description": "Send a chat message to another participant or 'all'.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "recipient": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["participant_code", "recipient", "content"],
+                },
+            },
+            {
+                "name": "create_trade_offer",
+                "description": "Create a trade offer (buy or sell) for a specific recipient.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "recipient": {"type": "string"},
+                        "offer_type": {"type": "string", "enum": ["buy", "sell"]},
+                        "shape": {"type": "string", "enum": ["circle", "square", "triangle", "diamond", "pentagon"]},
+                        "price_per_unit": {"type": "integer", "minimum": 1},
+                    },
+                    "required": [
+                        "participant_code",
+                        "recipient",
+                        "offer_type",
+                        "shape",
+                        "price_per_unit",
+                    ],
+                },
+            },
+            {
+                "name": "respond_to_trade_offer",
+                "description": "Respond to a trade offer by transaction_id (accept or reject). Use the simplified ID format (e.g., S123-001) from pending offers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "transaction_id": {"type": "string", "description": "Transaction ID in simplified format (e.g., S123-001) from pending offers"},
+                        "response": {"type": "string", "enum": ["accept", "reject"]},
+                    },
+                    "required": ["participant_code", "transaction_id", "response"],
+                },
+            },
+            {
+                "name": "cancel_trade_offer",
+                "description": "Cancel a trade offer that you proposed. Use the simplified ID format (e.g., S123-001) from pending offers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "transaction_id": {"type": "string", "description": "Transaction ID in simplified format (e.g., S123-001) from pending offers"},
+                    },
+                    "required": ["participant_code", "transaction_id"],
+                },
+            },
+            {
+                "name": "produce_shape",
+                "description": "Produce shapes. Specialty shapes cost less than regular shapes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "shape": {"type": "string", "enum": ["circle", "square", "triangle", "diamond", "pentagon"]},
+                        "quantity": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["participant_code", "shape"],
+                },
+            },
+            {
+                "name": "fulfill_orders",
+                "description": "Fulfill orders using shapes from inventory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "order_indices": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["participant_code", "order_indices"],
+                },
+            },
+            {
+                "name": "process_completed_productions",
+                "description": "Process completed production items and move them to inventory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+            {
+                "name": "mark_messages_as_read",
+                "description": "Mark unread messages as read for this agent. Use this when you want to acknowledge that you have seen and processed the messages.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "message_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional: specific message IDs to mark as read. If not provided, marks all unread messages as read."},
+                    },
+                    "required": ["participant_code"],
+                },
+            },
+            {
+                "name": "make_investment",
+                "description": "Make an investment decision in the DayTrader experiment. Only available in DayTrader sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "invest_price": {"type": "number", "description": "The price at which to make the investment"},
+                        "invest_decision_type": {"type": "string", "enum": ["individual", "group"], "description": "Whether this is an individual or group investment decision"},
+                    },
+                    "required": ["participant_code", "invest_price", "invest_decision_type"],
+                },
+            },
+            {
+                "name": "get_investment_history",
+                "description": "Get investment history for a participant in DayTrader experiment. Only available in DayTrader sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                    },
+                    "required": ["participant_code"],
+                },
+            },
+            {
+                "name": "submit_ranking",
+                "description": "Submit essay rankings for a participant in Essay Ranking experiment. Only available in Essay Ranking sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "rankings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "essay_id": {"type": "string", "description": "ID of the essay being ranked"},
+                                    "rank": {"type": "integer", "description": "Rank number (1 = best, higher numbers = worse)"},
+                                    "reasoning": {"type": "string", "description": "Reasoning for this ranking"}
+                                },
+                                "required": ["essay_id", "rank"]
+                            },
+                            "description": "List of essay rankings with essay_id, rank, and reasoning"
+                        },
+                    },
+                    "required": ["participant_code", "rankings"],
+                },
+            },
+            {
+                "name": "get_assigned_essays",
+                "description": "Get essays assigned to a participant in Essay Ranking experiment. Only available in Essay Ranking sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                    },
+                    "required": ["participant_code"],
+                },
+            },
+            {
+                "name": "get_essay_content",
+                "description": "Get the full content of a specific essay for reading and evaluation. Only available in Essay Ranking sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "essay_id": {"type": "string", "description": "ID of the essay to get content for"},
+                    },
+                    "required": ["participant_code", "essay_id"],
+                },
+            },
+            {
+                "name": "get_assigned_words",
+                "description": "Get the words assigned to you as a hinter. Only available in WordGuessing sessions and only for hinter role.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                    },
+                    "required": ["participant_code"],
+                },
+            },
+        ]
+
+        if api_provider == 'anthropic':
+            # Convert to Anthropic/Claude format
+            return [
+                {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "input_schema": tool["parameters"],
+                }
+                for tool in base_tools
+            ]
+        
+        # Default to OpenAI format
         return [
             {
                 "type": "function",
                 "function": {
-                    "name": "get_game_state",
-                    "description": "Get current game state including private (money, inventory, orders) and public (round, time, others).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"}
-                        },
-                        "required": ["participant_code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "send_message",
-                    "description": "Send a chat message to another participant or 'all'.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "recipient": {"type": "string"},
-                            "content": {"type": "string"},
-                        },
-                        "required": ["participant_code", "recipient", "content"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "create_trade_offer",
-                    "description": "Create a trade offer (buy or sell) for a specific recipient.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "recipient": {"type": "string"},
-                            "offer_type": {"type": "string", "enum": ["buy", "sell"]},
-                            "shape": {"type": "string", "enum": ["circle", "square", "triangle", "diamond", "pentagon"]},
-                            "price_per_unit": {"type": "integer", "minimum": 1},
-                        },
-                        "required": [
-                            "participant_code",
-                            "recipient",
-                            "offer_type",
-                            "shape",
-                            "price_per_unit",
-                        ],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "respond_to_trade_offer",
-                    "description": "Respond to a trade offer by transaction_id (accept or reject). Use the simplified ID format (e.g., S123-001) from pending offers.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "transaction_id": {"type": "string", "description": "Transaction ID in simplified format (e.g., S123-001) from pending offers"},
-                            "response": {"type": "string", "enum": ["accept", "reject"]},
-                        },
-                        "required": ["participant_code", "transaction_id", "response"],
-                    },
-                },
-            },
-
-            {
-                "type": "function",
-                "function": {
-                    "name": "cancel_trade_offer",
-                    "description": "Cancel a trade offer that you proposed. Use the simplified ID format (e.g., S123-001) from pending offers.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "transaction_id": {"type": "string", "description": "Transaction ID in simplified format (e.g., S123-001) from pending offers"},
-                        },
-                        "required": ["participant_code", "transaction_id"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "produce_shape",
-                    "description": "Produce shapes. Specialty shapes cost less than regular shapes.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "shape": {"type": "string", "enum": ["circle", "square", "triangle", "diamond", "pentagon"]},
-                            "quantity": {"type": "integer", "minimum": 1},
-                        },
-                        "required": ["participant_code", "shape"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "fulfill_orders",
-                    "description": "Fulfill orders using shapes from inventory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "order_indices": {"type": "array", "items": {"type": "integer"}},
-                        },
-                        "required": ["participant_code", "order_indices"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "process_completed_productions",
-                    "description": "Process completed production items and move them to inventory.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "mark_messages_as_read",
-                    "description": "Mark unread messages as read for this agent. Use this when you want to acknowledge that you have seen and processed the messages.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "message_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional: specific message IDs to mark as read. If not provided, marks all unread messages as read."},
-                        },
-                        "required": ["participant_code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "make_investment",
-                    "description": "Make an investment decision in the DayTrader experiment. Only available in DayTrader sessions.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "invest_price": {"type": "number", "description": "The price at which to make the investment"},
-                            "invest_decision_type": {"type": "string", "enum": ["individual", "group"], "description": "Whether this is an individual or group investment decision"},
-                        },
-                        "required": ["participant_code", "invest_price", "invest_decision_type"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_investment_history",
-                    "description": "Get investment history for a participant in DayTrader experiment. Only available in DayTrader sessions.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                        },
-                        "required": ["participant_code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "submit_ranking",
-                    "description": "Submit essay rankings for a participant in Essay Ranking experiment. Only available in Essay Ranking sessions.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "rankings": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "essay_id": {"type": "string", "description": "ID of the essay being ranked"},
-                                        "rank": {"type": "integer", "description": "Rank number (1 = best, higher numbers = worse)"},
-                                        "reasoning": {"type": "string", "description": "Reasoning for this ranking"}
-                                    },
-                                    "required": ["essay_id", "rank"]
-                                },
-                                "description": "List of essay rankings with essay_id, rank, and reasoning"
-                            },
-                        },
-                        "required": ["participant_code", "rankings"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_assigned_essays",
-                    "description": "Get essays assigned to a participant in Essay Ranking experiment. Only available in Essay Ranking sessions.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                        },
-                        "required": ["participant_code"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_essay_content",
-                    "description": "Get the full content of a specific essay for reading and evaluation. Only available in Essay Ranking sessions.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                            "essay_id": {"type": "string", "description": "ID of the essay to get content for"},
-                        },
-                        "required": ["participant_code", "essay_id"],
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_assigned_words",
-                    "description": "Get the words assigned to you as a hinter. Only available in WordGuessing sessions and only for hinter role.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "participant_code": {"type": "string"},
-                        },
-                        "required": ["participant_code"],
-                    },
-                },
-            },
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["parameters"],
+                }
+            }
+            for tool in base_tools
         ]
+    
+    def get_openai_tools_spec(self) -> List[Dict[str, Any]]:
+        """Return OpenAI function-calling tool specification for these tools."""
+        return self.get_tools_spec(api_provider='openai')
 
     # --------- Generic dispatcher to execute a tool call dict ---------
 
@@ -1278,4 +1260,4 @@ class AgentTools:
 # Convenience factory
 
 def create_tools(database_url: Optional[str] = None) -> AgentTools:
-    return AgentTools(database_url) 
+    return AgentTools(database_url)

@@ -17,6 +17,7 @@ PyJWT>=2.10.1
 
 # AI and LLM Integration
 openai>=1.99.1
+anthropic>=0.25.8
 mcp[cli]>=1.12.3
 
 # HTTP Requests
@@ -38,3 +39,4 @@ gunicorn>=21.2.0
 
 # Additional utilities
 Werkzeug>=2.3.0
+boto3>=1.34.0

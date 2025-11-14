@@ -26,8 +26,8 @@ echo -e "${GREEN}[OK] Docker is running${NC}"
 if [ ! -f .env.prod ]; then
     echo -e "${YELLOW}[WARNING] .env.prod not found. Creating from template...${NC}"
     
-    if [ -f .env.prod.template ]; then
-        cp .env.prod.template .env.prod
+    if [ -f deployment/.env.prod.template ]; then
+        cp deployment/.env.prod.template .env.prod
         echo -e "${YELLOW}[ACTION REQUIRED] Please edit .env.prod and set your credentials:${NC}"
         echo "  - POSTGRES_PASSWORD"
         echo "  - OPENAI_API_KEY"
@@ -68,10 +68,10 @@ COMMAND=${1:-deploy}
 case $COMMAND in
   deploy)
     echo "Building production images..."
-    docker-compose -f docker-compose.prod.yml build --no-cache
+    docker-compose -f deployment/docker-compose.prod.yml build --no-cache
     
     echo "Starting services..."
-    docker-compose -f docker-compose.prod.yml up -d
+    docker-compose -f deployment/docker-compose.prod.yml up -d
     
     echo -e "${GREEN}=================================================="
     echo "Deployment Complete!"
@@ -102,12 +102,12 @@ case $COMMAND in
     
   stop)
     echo "Stopping services..."
-    docker-compose -f docker-compose.prod.yml down
+    docker-compose -f deployment/docker-compose.prod.yml down
     echo -e "${GREEN}[OK] Services stopped${NC}"
     ;;
     
   logs)
-    docker-compose -f docker-compose.prod.yml logs -f
+    docker-compose -f deployment/docker-compose.prod.yml logs -f
     ;;
     
   status)
