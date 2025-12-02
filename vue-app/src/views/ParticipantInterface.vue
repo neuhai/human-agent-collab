@@ -44,8 +44,9 @@
       </div>
 
       <!-- ECL Session Status Overlay -->
+      <!-- Hide for Hidden Profiles when session ends (final vote popup will show instead) -->
       <Transition name="session-overlay" mode="out-in">
-        <div v-if="!isSessionActive" class="session-overlay" key="session-overlay">
+        <div v-if="!isSessionActive && !(interfaceConfig.myAction?.type === 'hiddenprofiles' && (stableSessionStatus === 'completed' || stableSessionStatus === 'stopped' || stableSessionStatus === 'ended'))" class="session-overlay" key="session-overlay">
           <div class="session-overlay-content">
             <div class="session-overlay-icon">⏸️</div>
             <h3>{{ sessionStatusMessage }}</h3>
@@ -171,8 +172,11 @@
                     v-for="participant in otherParticipants" 
                     :key="participant.participant_id"
                     class="component-list-item"
-                    :class="{ selected: selectedPlayer?.participant_id === participant.participant_id }"
-                    @click="selectPlayer(participant)"
+                    :class="{ 
+                      selected: !isBroadcastMode && selectedPlayer?.participant_id === participant.participant_id,
+                      disabled: isBroadcastMode
+                    }"
+                    @click="!isBroadcastMode && selectPlayer(participant)"
                   >
                     <div class="player-info">
                       <div class="component-text">
@@ -196,7 +200,7 @@
                 <div class="broadcast-mode">
                   <!-- Broadcast Mode Header with Tabs -->
                   <div class="interaction-header">
-                    <h3>Broadcast Mode</h3>
+                    <h3>Group Chat</h3>
                     <div class="interaction-tabs">
                       <button 
                         v-if="eclMessageTabEnabled"
@@ -356,7 +360,247 @@
       </div>
     </div>
 
+    <!-- WORD GUESSED POPUP (WordGuessing) -->
+    <div v-if="isWordGuessingExperiment && showWordGuessedPopup" class="word-guessed-popup" @click="hideWordGuessedPopupIfClickedOutside">
+      <div class="word-guessed-popup-content">
+        <div class="word-guessed-popup-header">
+          <h3>🎉 Congratulations!</h3>
+        </div>
+        <div class="word-guessed-popup-body">
+          <p><strong>The word has been guessed!</strong></p>
+          <p>The session will now end. Thank you for participating!</p>
+        </div>
+        <div class="word-guessed-popup-footer">
+          <button @click="handleWordGuessed" class="word-guessed-btn">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HIDDEN PROFILES RULES POPUP -->
+    <div
+      v-if="interfaceConfig.myAction?.type === 'hiddenprofiles' && hiddenProfilesPhase === 'rules'"
+      class="rules-popup"
+      style="z-index: 10000;"
+    >
+      <div class="rules-popup-content" style="max-width: 800px;">
+        <div class="rules-popup-header">
+          <h3>Hidden Profiles Experiment - Rules</h3>
+        </div>
+        <div class="rules-popup-body">
+          <p><strong>Welcome to the Hidden Profiles experiment!</strong></p>
+          <p>In this experiment, you need to discuss with other participants to make a final decision on the preferred candidate for a pilot job. Steps:</p>
+          <ol style="text-align: left; margin: 20px 0; padding: 0 0 0 14px; font-size: 16px;">
+            <li>Read candidate documents to understand different candidates' pros and cons</li>
+            <li>Vote for your preferred candidate</li>
+            <li>Discuss with other participants</li>
+            <li>You will not be able to view the documents during discussion</li>
+            <li>Make a final decision</li>
+          </ol>
+          <p>Please read the materials carefully. Note that you and other participants may receive different materials, so please participate actively in the discussion to make the best decision!</p>
+          <div style="margin-top: 30px;">
+            <button @click="startReadingPhase" class="btn primary" style="font-size: 16px; padding: 12px 24px;">
+              Start Reading
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HIDDEN PROFILES READING PHASE -->
+    <div
+      v-if="interfaceConfig.myAction?.type === 'hiddenprofiles' && hiddenProfilesPhase === 'reading'"
+      class="reading-phase-overlay"
+      style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.95); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px;"
+    >
+      <div style="background: white; border-radius: 8px; padding: 30px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; width: 100%;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 style="margin: 0;">Reading Phase</h2>
+          <div style="font-size: 24px; font-weight: bold; color: #2563eb;">
+            Time Remaining: {{ formatReadingTime(readingTimeRemaining) }}
+          </div>
+        </div>
+        <div style="flex: 1; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 20px; background: #f9f9f9;">
+          <div v-if="candidateDocument" style="width: 100%;">
+            <FilePreview
+              v-if="candidateDocument.file_url"
+              :file-url="candidateDocument.file_url"
+              :filename="candidateDocument.filename"
+              :visible="true"
+              @error="onPdfError"
+            />
+            <div
+              v-if="candidateDocument.content && (!candidateDocument.file_url || pdfError)"
+              class="essay-text-content"
+              style="margin-top: 20px;"
+            >
+              <h4>Document Content:</h4>
+              <div
+                class="essay-text"
+                v-html="formatDocumentContent(candidateDocument.content)"
+                style="white-space: pre-wrap; padding: 10px; background: white; border-radius: 4px;"
+              ></div>
+            </div>
+          </div>
+          <div v-else style="text-align: center; padding: 40px;">
+            <p>Loading document...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HIDDEN PROFILES VOTING PHASE POPUP -->
+    <div
+      v-if="interfaceConfig.myAction?.type === 'hiddenprofiles' && hiddenProfilesPhase === 'voting'"
+      class="rules-popup"
+      style="z-index: 10000;"
+    >
+      <div class="rules-popup-content" style="max-width: 800px;">
+        <div class="rules-popup-header">
+          <h3>Vote for Your Preferred Candidate</h3>
+        </div>
+        <div class="rules-popup-body">
+          <p>Please select your preferred candidate based on the materials you just read:</p>
+          <div style="margin: 20px 0;">
+            <label for="initial-vote-dropdown" style="display: block; margin-bottom: 10px; font-weight: bold;">Select candidate:</label>
+            <select 
+              v-model="selectedCandidateVote" 
+              id="initial-vote-dropdown"
+              class="production-dropdown" 
+              style="width: 100%; padding: 10px; font-size: 16px;"
+            >
+              <option value="">Choose a candidate...</option>
+              <option v-for="(name, index) in candidateNames" :key="index" :value="name">
+                {{ name }}
+              </option>
+            </select>
+          </div>
+          <div style="margin-top: 20px;">
+            <button 
+              @click="submitInitialVote" 
+              class="btn primary" 
+              :disabled="!selectedCandidateVote"
+              style="width: 100%; font-size: 16px; padding: 12px 24px;"
+            >
+              Submit Vote
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HIDDEN PROFILES DECISION POPUP -->
+    <div
+      v-if="interfaceConfig.myAction?.type === 'hiddenprofiles' && hiddenProfilesPhase === 'decision' && showDecisionPopup"
+      class="rules-popup"
+      style="z-index: 10000;"
+    >
+      <div class="rules-popup-content" style="max-width: 800px;">
+        <div class="rules-popup-header">
+          <h3>Final Decision</h3>
+        </div>
+        <div class="rules-popup-body">
+          <p>Please make your final decision on the preferred candidate:</p>
+          <div style="margin: 20px 0;">
+            <label for="final-vote-dropdown" style="display: block; margin-bottom: 10px; font-weight: bold;">Select candidate:</label>
+            <select 
+              v-model="selectedCandidateVote" 
+              id="final-vote-dropdown"
+              class="production-dropdown" 
+              style="width: 100%; padding: 10px; font-size: 16px;"
+            >
+              <option value="">Choose a candidate...</option>
+              <option v-for="(name, index) in candidateNames" :key="index" :value="name">
+                {{ name }}
+              </option>
+            </select>
+          </div>
+          <div style="margin-top: 20px;">
+            <button 
+              v-if="!showSurveyLink"
+              @click="submitFinalDecision" 
+              class="btn primary" 
+              :disabled="!selectedCandidateVote"
+              style="width: 100%; font-size: 16px; padding: 12px 24px;"
+            >
+              Submit Final Decision
+            </button>
+            <div v-if="showSurveyLink" style="margin-top: 20px; padding: 20px; background-color: #f0f8ff; border: 2px solid #4CAF50; border-radius: 8px; text-align: center;">
+              <p style="font-size: 18px; color: #2c3e50; margin-bottom: 15px;">
+                Final decision submitted successfully! ONE STEP LEFT:
+              </p>
+              <p style="font-size: 16px; font-weight: bold; color: #34495e; margin-bottom: 20px;">
+                Please finish this survey to conclude your session. Thank you!
+              </p>
+              <a 
+                :href="surveyUrl" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                style="display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold; transition: background-color 0.3s;"
+                @mouseover="($event.target as HTMLElement).style.backgroundColor = '#45a049'"
+                @mouseout="($event.target as HTMLElement).style.backgroundColor = '#4CAF50'"
+              >
+                Open Survey
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ESSAY VIEWER MODAL -->
+    <!-- Candidate Document Viewer Modal (Hidden Profiles) -->
+    <div
+      v-show="showCandidateDocumentViewer"
+      class="essay-viewer-modal"
+      @click="hideCandidateDocumentViewerIfClickedOutside"
+    >
+      <div class="essay-viewer-content" style="max-width: 90vw; max-height: 90vh;">
+        <div class="essay-viewer-header">
+          <h3>{{ candidateDocument?.title || candidateDocument?.filename || 'Candidate Document' }}</h3>
+          <button @click="hideCandidateDocumentViewer" class="close-essay-btn">×</button>
+        </div>
+        <div class="essay-viewer-body" style="overflow-y: auto; max-height: calc(90vh - 100px);">
+          <div v-if="candidateDocument" class="essay-content">
+            <div class="essay-info" style="margin-bottom: 20px;">
+              <p><strong>Document ID:</strong> {{ candidateDocument.doc_id }}</p>
+              <p><strong>Title:</strong> {{ candidateDocument.title || candidateDocument.filename }}</p>
+              <p v-if="candidateDocument.filename"><strong>Filename:</strong> {{ candidateDocument.filename }}</p>
+            </div>
+
+            <!-- File preview component (PDF, Word, or generic) -->
+            <FilePreview
+              v-if="candidateDocument.file_url"
+              :file-url="candidateDocument.file_url"
+              :filename="candidateDocument.filename"
+              :visible="showCandidateDocumentViewer"
+              @error="onPdfError"
+            />
+
+            <!-- Show text content if PDF not available, failed to load, or no file_url -->
+            <div
+              v-if="candidateDocument.content && (!candidateDocument.file_url || pdfError)"
+              class="essay-text-content"
+              style="margin-top: 20px;"
+            >
+              <h4>Document Content:</h4>
+              <div
+                class="essay-text"
+                v-html="formatDocumentContent(candidateDocument.content)"
+                style="white-space: pre-wrap; max-height: 500px; overflow-y: auto; padding: 10px; background: #f9f9f9; border-radius: 4px;"
+              ></div>
+            </div>
+            <div
+              v-else-if="!candidateDocument.file_url && !candidateDocument.content"
+              class="essay-text-content"
+              style="margin-top: 20px;"
+            >
+              <p style="color: #666; font-style: italic;">No content available for this document.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-show="showEssayViewer" class="essay-viewer-modal" @click="hideEssayViewerIfClickedOutside">
       <div class="essay-viewer-content">
         <div class="essay-viewer-header">
@@ -381,8 +625,9 @@
     </div>
 
     <!-- SESSION STATUS OVERLAY -->
+    <!-- Hide for Hidden Profiles when session ends (final vote popup will show instead) -->
     <Transition name="session-overlay" mode="out-in">
-      <div v-if="!isSessionActive" class="session-overlay" key="session-overlay">
+      <div v-if="!isSessionActive && !(interfaceConfig.myAction?.type === 'hiddenprofiles' && (stableSessionStatus === 'completed' || stableSessionStatus === 'stopped' || stableSessionStatus === 'ended'))" class="session-overlay" key="session-overlay">
         <div class="session-overlay-content">
           <div class="session-overlay-icon">⏸️</div>
           <h3>{{ sessionStatusMessage }}</h3>
@@ -582,6 +827,19 @@
                 </div>
               </div>
 
+              <!-- Hidden Profiles Action Forms (only show during discussion phase) -->
+              <div v-else-if="interfaceConfig.myAction.type === 'hiddenprofiles' && hiddenProfilesPhase === 'discussion'" class="hiddenprofiles-action">
+                <div class="factory-info">
+                  <span class="component-text">Discussion Phase</span>
+                </div>
+                <div class="production-controls">
+                  <p style="color: #666; margin: 10px 0;">Please discuss with other participants to reach a consensus.</p>
+                  <div v-if="currentVote" class="vote-status" style="margin-top: 12px; padding: 8px; background: #f0f0f0; border-radius: 4px;">
+                    <span class="component-text">Your initial vote: <strong>{{ currentVote }}</strong></span>
+                  </div>
+                </div>
+              </div>
+
               <!-- Shape Factory Action Forms -->
               <div v-else-if="interfaceConfig.myAction.type === 'shapefactory'">
                 <!-- Factory Info (only for Shape Factory) -->
@@ -675,6 +933,14 @@
                 </div>
               </div>
               
+              <!-- Hidden Profiles Task (only show during discussion phase, no PDF preview) -->
+              <div v-else-if="interfaceConfig.myTask.type === 'hiddenprofiles' && hiddenProfilesPhase === 'discussion'" class="hiddenprofiles-task">
+                <div class="task-content">
+                  <p>Review the public information and your assigned candidate document to make an informed decision.</p>
+                  <p style="margin-top: 12px; color: #666; font-size: 14px;">Use the discussion area to communicate with other participants.</p>
+                </div>
+              </div>
+              
               <!-- Default Task (when no specific type is set) -->
               <div v-else class="default-task">
                 <div class="task-content">
@@ -697,8 +963,11 @@
                   v-for="participant in otherParticipants" 
                   :key="participant.participant_id"
                   class="component-list-item"
-                  :class="{ selected: selectedPlayer?.participant_id === participant.participant_id }"
-                  @click="selectPlayer(participant)"
+                  :class="{ 
+                    selected: !isBroadcastMode && selectedPlayer?.participant_id === participant.participant_id,
+                    disabled: isBroadcastMode
+                  }"
+                  @click="!isBroadcastMode && selectPlayer(participant)"
                 >
                   <div class="player-info">
                     <div class="component-text">
@@ -722,7 +991,7 @@
             <div class="broadcast-mode">
               <!-- Broadcast Mode Header with Tabs -->
               <div class="interaction-header">
-                <h3>Broadcast Mode</h3>
+                <!-- <h3>Group Chat</h3> -->
                 <div class="interaction-tabs">
                   <button 
                     v-if="interfaceConfig.socialPanel.showTradeTab"
@@ -738,7 +1007,7 @@
                     class="tab-btn" 
                     :class="{ active: currentTab === 'message', 'has-message-notifications': unreadBroadcastCount > 0 }"
                   >
-                    Broadcast
+                    Group Chat
                     <span v-if="unreadBroadcastCount > 0" class="unread-badge">{{ unreadBroadcastCount }}</span>
                   </button>
                 </div>
@@ -1209,6 +1478,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { BACKEND_URL } from '@/config.js'
 import ECLInterface from '@/components/ECLInterface.vue'
+import FilePreview from '@/components/FilePreview.vue'
 // @ts-ignore
 import io from 'socket.io-client'
 
@@ -1470,6 +1740,30 @@ const experimentConfigs = {
       showTradeTab: false,
       showChatTab: true
     }
+  },
+  'hiddenprofiles': {
+    myStatus: {
+      showMoney: false,
+      showInventory: false
+    },
+    myAction: {
+      type: 'hiddenprofiles',
+      showTradeForm: false,
+      showProductionForm: false,
+      showOrderForm: false
+    },
+    myTask: {
+      enabled: true,
+      type: 'hiddenprofiles'
+    },
+    trade: {
+      enabled: false,
+      showTradeHistory: false
+    },
+    socialPanel: {
+      showTradeTab: false,
+      showChatTab: true
+    }
   }
 }
 
@@ -1601,6 +1895,11 @@ const configureInterface = async () => {
           socialPanel: config.socialPanel
         }
         
+        // Force broadcast mode for hiddenprofiles experiment
+        if (experimentType === 'hiddenprofiles') {
+          gameState.value.communication_level = 'broadcast'
+          console.log('✅ Hidden Profiles: Communication level set to broadcast')
+        }
         
         // Force a re-render by triggering a small delay
         await nextTick()
@@ -1665,6 +1964,7 @@ const sessionId = ref('')  // Will be set from sessionStorage
 const participantId = ref('')
 const gameState = ref<GameState>({})
 const showRules = ref(false)
+const showWordGuessedPopup = ref(false)
 const selectedPlayer = ref<Participant | null>(null)
 const currentTab = ref<'trade' | 'message'>('trade')
 
@@ -1702,6 +2002,7 @@ const timeRemaining = ref<number>(0)
 const timerStartTime = ref<number>(0) // When the timer started
 const timerInitialDuration = ref<number>(0) // Initial duration when timer started
 const isTimerRunning = ref<boolean>(false) // Whether timer is actively running
+const timerStartedAfterVoteAt = ref<number>(0) // Timestamp when timer was started after vote submission (for Hidden Profiles)
 
 // Template refs
 const messageHistory = ref<HTMLElement | null>(null)
@@ -1746,6 +2047,35 @@ const currentEssay = ref<{
   essay_id: string
   title: string
 } | null>(null)
+
+// Hidden Profiles state
+const candidateDocument = ref<any>(null)
+const candidateDocuments = ref<Array<{
+  doc_id: string
+  title: string
+  filename: string
+  content?: string
+  file_url?: string
+}>>([])
+const candidateNames = ref<string[]>([]) // Separate state for candidate names (for voting)
+const showCandidateDocumentViewer = ref(false)
+const selectedCandidateVote = ref('')
+const showSurveyLink = ref(false)
+const surveyUrl = 'https://neu.co1.qualtrics.com/jfe/form/SV_3f0zkvUVfaorsPA'
+const currentVote = ref<string | null>(null)
+const publicInfo = ref<string | null>(null)
+// PDF viewer error state (used to decide when to fall back to text)
+const pdfError = ref<string | null>(null)
+
+// Hidden Profiles experiment phases
+type HiddenProfilesPhase = 'rules' | 'reading' | 'voting' | 'discussion' | 'decision'
+const hiddenProfilesPhase = ref<HiddenProfilesPhase>('rules')
+const readingTimeRemaining = ref<number>(0) // in seconds
+const readingTimeTotal = ref<number>(300) // default 5 minutes, will be loaded from config
+const showDecisionPopup = ref(false)
+const hasStartedReading = ref(false)
+const hasCompletedVoting = ref(false)
+let readingTimerInterval: NodeJS.Timeout | null = null
 
 const confirmRanking = async () => {
   if (!isSessionActive.value) {
@@ -1878,7 +2208,414 @@ watch(() => interfaceConfig.value.myAction?.type, (newType, oldType) => {
   if (newType === 'essayranking' && newType !== oldType) {
     loadAssignedEssays()
   }
+  if (newType === 'hiddenprofiles' && newType !== oldType) {
+    loadHiddenProfilesData()
+    loadCandidateNames()
+    // Initialize phase to 'rules' when switching to hiddenprofiles
+    if (!hasStartedReading.value) {
+      hiddenProfilesPhase.value = 'rules'
+    }
+  }
 }, { immediate: false })
+
+// Watch for Hidden Profiles phase changes
+watch(() => hiddenProfilesPhase.value, (newPhase, oldPhase) => {
+  const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+  
+  if (isHiddenProfiles && newPhase === 'voting' && oldPhase === 'reading') {
+    // Phase changed from reading to voting
+    // NOTE: Session timer will start AFTER the user submits their initial vote
+    console.log('✅ Phase changed to voting - Waiting for initial vote submission to start session timer')
+  }
+}, { immediate: false })
+
+// Hidden Profiles functions
+const loadHiddenProfilesData = async () => {
+  try {
+    const sessionCode = sessionStorage.getItem('session_code')
+    const participantCode = sessionStorage.getItem('participant_code')
+    if (!sessionCode || !participantCode) {
+      console.warn('No session code or participant code available')
+      return
+    }
+    
+    const authToken = sessionStorage.getItem('auth_token')
+    if (!authToken) {
+      return
+    }
+    
+    // Load assigned documents
+    const response = await fetch(`/api/hiddenprofiles/get-assigned-documents?participant_code=${participantCode}&session_code=${sessionCode}`, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`
+      }
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      candidateDocument.value = result.candidate_document || null
+      publicInfo.value = result.public_info || null
+      
+      // Also try to get from participant state if available (for file_url)
+      if (gameState.value.participant?.candidate_document) {
+        // Merge file_url if available
+        if (gameState.value.participant.candidate_document.file_url && !candidateDocument.value?.file_url) {
+          candidateDocument.value = {
+            ...candidateDocument.value,
+            ...gameState.value.participant.candidate_document
+          }
+        }
+      }
+      
+      // Load candidate documents (for viewing)
+      await loadAllCandidateDocuments()
+      
+      // Load candidate names (for voting dropdown)
+      await loadCandidateNames()
+      
+      // Load current vote
+      await loadCurrentVote()
+    } else {
+      console.error('Failed to load assigned documents:', response.statusText)
+      // Fallback to game state if API fails
+      if (gameState.value.participant?.candidate_document) {
+        candidateDocument.value = gameState.value.participant.candidate_document
+      }
+      if (gameState.value.participant?.public_info) {
+        publicInfo.value = gameState.value.participant.public_info
+      }
+      await loadAllCandidateDocuments()
+      await loadCandidateNames()
+      await loadCurrentVote()
+    }
+  } catch (error) {
+    console.error('Error loading Hidden Profiles data:', error)
+  }
+}
+
+const loadAllCandidateDocuments = async () => {
+  try {
+    const sessionCode = sessionStorage.getItem('session_code')
+    if (!sessionCode) return
+    
+    // Get candidate documents from game state (separate from names)
+    const publicState = gameState.value.public_state
+    if (publicState?.candidate_docs && Array.isArray(publicState.candidate_docs)) {
+      candidateDocuments.value = publicState.candidate_docs.map((doc: any) => ({
+        doc_id: doc.doc_id,
+        title: doc.title || doc.filename || `Candidate ${doc.doc_id}`,
+        filename: doc.filename || ''
+      }))
+    }
+  } catch (error) {
+    console.error('Error loading candidate documents:', error)
+  }
+}
+
+const loadCandidateNames = async () => {
+  try {
+    const sessionCode = sessionStorage.getItem('session_code')
+    if (!sessionCode) return
+    
+    // Get candidate names from game state (separate from documents)
+    const publicState = gameState.value.public_state
+    if (publicState?.candidate_names && Array.isArray(publicState.candidate_names)) {
+      candidateNames.value = publicState.candidate_names.filter((name: string) => name && name.trim().length > 0)
+    } else {
+      candidateNames.value = []
+    }
+  } catch (error) {
+    console.error('Error loading candidate names:', error)
+    candidateNames.value = []
+  }
+}
+
+const loadCurrentVote = async () => {
+  try {
+    const participantState = gameState.value.participant
+    if (participantState?.vote) {
+      currentVote.value = participantState.vote
+      selectedCandidateVote.value = participantState.vote
+    }
+  } catch (error) {
+    console.error('Error loading current vote:', error)
+  }
+}
+
+const viewCandidateDocument = () => {
+  if (candidateDocument.value) {
+    showCandidateDocumentViewer.value = true
+    // PDF loading is handled by PdfPreview component
+  } else {
+    alert('No candidate document assigned yet.')
+  }
+}
+
+const hideCandidateDocumentViewer = () => {
+  showCandidateDocumentViewer.value = false
+  // Reset PDF error state
+  pdfError.value = null
+}
+
+const onPdfError = (message: string) => {
+  // Store error so template knows to fall back to text content
+  pdfError.value = message || 'Failed to load PDF'
+}
+
+const hideCandidateDocumentViewerIfClickedOutside = (event: Event) => {
+  const target = event.target as HTMLElement
+  if (target.classList.contains('essay-viewer-modal')) {
+    hideCandidateDocumentViewer()
+  }
+}
+
+const formatDocumentContent = (content: string) => {
+  if (!content) return ''
+  // Convert plain text to HTML with line breaks
+  return content.replace(/\n/g, '<br>')
+}
+
+const submitVote = async () => {
+  if (!selectedCandidateVote.value) {
+    alert('Please select a candidate to vote for.')
+    return
+  }
+  
+  try {
+    const sessionCode = sessionStorage.getItem('session_code')
+    const participantCode = sessionStorage.getItem('participant_code')
+    if (!sessionCode || !participantCode) {
+      alert('Session or participant information missing.')
+      return
+    }
+    
+    const authToken = sessionStorage.getItem('auth_token')
+    if (!authToken) {
+      alert('Authentication required.')
+      return
+    }
+    
+    const response = await fetch('/api/hiddenprofiles/submit-vote', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        participant_code: participantCode,
+        session_code: sessionCode,
+        candidate_name: selectedCandidateVote.value // Changed from candidate_document_id to candidate_name
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      if (result.success) {
+        alert('Vote submitted successfully!')
+        currentVote.value = selectedCandidateVote.value
+        // Refresh game state
+        await loadGameStateIncremental()
+      } else {
+        alert(`Failed to submit vote: ${result.error || 'Unknown error'}`)
+      }
+    } else {
+      const error = await response.json()
+      alert(`Failed to submit vote: ${error.error || 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('Error submitting vote:', error)
+    alert('Error submitting vote. Please try again.')
+  }
+}
+
+// Hidden Profiles phase management functions
+const startReadingPhase = () => {
+  hiddenProfilesPhase.value = 'reading'
+  hasStartedReading.value = true
+  // Load reading time from config (default 5 minutes = 300 seconds)
+  const config = gameState.value.experiment_config?.hiddenProfiles || {}
+  // Also check experiment_config directly for readingTimeMinutes, and public_state
+  const readingTimeMinutes = config.readingTimeMinutes || 
+                              gameState.value.experiment_config?.readingTimeMinutes || 
+                              gameState.value.public_state?.experiment_config?.hiddenProfiles?.readingTimeMinutes ||
+                              5
+  readingTimeTotal.value = readingTimeMinutes * 60
+  readingTimeRemaining.value = readingTimeTotal.value
+  
+  console.log('📖 Starting reading phase with duration:', readingTimeMinutes, 'minutes (', readingTimeTotal.value, 'seconds)')
+  console.log('📖 Config sources checked:', {
+    'hiddenProfiles.readingTimeMinutes': config.readingTimeMinutes,
+    'experiment_config.readingTimeMinutes': gameState.value.experiment_config?.readingTimeMinutes,
+    'public_state.experiment_config.hiddenProfiles.readingTimeMinutes': gameState.value.public_state?.experiment_config?.hiddenProfiles?.readingTimeMinutes,
+    'final_value': readingTimeMinutes
+  })
+  
+  // Start reading timer
+  if (readingTimerInterval) {
+    clearInterval(readingTimerInterval)
+  }
+  readingTimerInterval = setInterval(() => {
+    if (readingTimeRemaining.value > 0) {
+      readingTimeRemaining.value--
+    } else {
+      // Reading time finished, move to voting phase
+      if (readingTimerInterval) {
+        clearInterval(readingTimerInterval)
+        readingTimerInterval = null
+      }
+      
+      // Update phase first
+      hiddenProfilesPhase.value = 'voting'
+      
+      // NOTE: Session timer will start AFTER the user submits their initial vote
+      // Reading time doesn't count as session time
+      console.log('✅ Reading phase ended - Waiting for initial vote submission to start session timer')
+    }
+  }, 1000)
+}
+
+const formatReadingTime = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+const submitInitialVote = async () => {
+  if (!selectedCandidateVote.value) {
+    alert('Please select a candidate to vote for.')
+    return
+  }
+  
+  try {
+    const sessionCode = sessionStorage.getItem('session_code')
+    const participantCode = sessionStorage.getItem('participant_code')
+    if (!sessionCode || !participantCode) {
+      alert('Session or participant information missing.')
+      return
+    }
+    
+    const authToken = sessionStorage.getItem('auth_token')
+    if (!authToken) {
+      alert('Authentication required.')
+      return
+    }
+    
+    const response = await fetch('/api/hiddenprofiles/submit-vote', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        participant_code: participantCode,
+        session_code: sessionCode,
+        candidate_name: selectedCandidateVote.value
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      if (result.success) {
+        currentVote.value = selectedCandidateVote.value
+        hasCompletedVoting.value = true
+        
+        // NOW start the session timer after vote is submitted
+        if (!isTimerRunning.value) {
+          const sessionDuration = gameState.value.experiment_config?.sessionDuration || 15
+          const timeRemainingSeconds = sessionDuration * 60
+          
+          timeRemaining.value = timeRemainingSeconds
+          timerStartTime.value = Date.now()
+          timerInitialDuration.value = timeRemainingSeconds
+          isTimerRunning.value = true
+          timerStartedAfterVoteAt.value = Date.now() // Mark when timer was started after vote
+          
+          // Ensure session is marked as running if it isn't already
+          if (!gameState.value.experiment_config) {
+            gameState.value.experiment_config = {}
+          }
+          if (gameState.value.experiment_config.experiment_status !== 'running') {
+            gameState.value.experiment_config.experiment_status = 'running'
+          }
+          
+          // Start local timer
+          startLocalTimer()
+          
+          console.log('✅ Initial vote submitted - Session timer started:', sessionDuration, 'minutes')
+        } else {
+          console.log('⏰ Session timer already running after vote submission')
+        }
+        
+        // Move to discussion phase
+        hiddenProfilesPhase.value = 'discussion'
+        // Refresh game state
+        await loadGameStateIncremental()
+      } else {
+        alert(`Failed to submit vote: ${result.error || 'Unknown error'}`)
+      }
+    } else {
+      const error = await response.json()
+      alert(`Failed to submit vote: ${error.error || 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('Error submitting vote:', error)
+    alert('Error submitting vote. Please try again.')
+  }
+}
+
+const submitFinalDecision = async () => {
+  if (!selectedCandidateVote.value) {
+    alert('Please select a candidate for your final decision.')
+    return
+  }
+  
+  try {
+    const sessionCode = sessionStorage.getItem('session_code')
+    const participantCode = sessionStorage.getItem('participant_code')
+    if (!sessionCode || !participantCode) {
+      alert('Session or participant information missing.')
+      return
+    }
+    
+    const authToken = sessionStorage.getItem('auth_token')
+    if (!authToken) {
+      alert('Authentication required.')
+      return
+    }
+    
+    const response = await fetch('/api/hiddenprofiles/submit-vote', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        participant_code: participantCode,
+        session_code: sessionCode,
+        candidate_name: selectedCandidateVote.value
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      if (result.success) {
+        currentVote.value = selectedCandidateVote.value
+        showSurveyLink.value = true
+        // Keep popup open to show survey link
+        // Refresh game state
+        await loadGameStateIncremental()
+      } else {
+        alert(`Failed to submit decision: ${result.error || 'Unknown error'}`)
+      }
+    } else {
+      const error = await response.json()
+      alert(`Failed to submit decision: ${error.error || 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('Error submitting decision:', error)
+    alert('Error submitting decision. Please try again.')
+  }
+}
 
 
 
@@ -1932,6 +2669,16 @@ const shapeConfig = {
 
 // Computed properties
 const timerDisplay = computed(() => {
+  // For Hidden Profiles, don't show session timer during reading phase or before initial vote
+  const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+  if (isHiddenProfiles) {
+    const isInReadingPhase = hiddenProfilesPhase.value === 'reading'
+    const hasNotVoted = !hasCompletedVoting.value
+    if (isInReadingPhase || hasNotVoted) {
+      return 'Time: --:--' // Don't show timer during reading or before vote
+    }
+  }
+  
   if (timeRemaining.value <= 0) return 'Time: --:--'
   
   const minutes = Math.floor(timeRemaining.value / 60)
@@ -1940,7 +2687,33 @@ const timerDisplay = computed(() => {
 })
 
 // Local countdown timer functions
+// Helper function to check if we should start the session timer
+// For Hidden Profiles, don't start timer during reading phase
+const shouldStartSessionTimer = (): boolean => {
+  const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+  if (isHiddenProfiles) {
+    // For Hidden Profiles, only start timer after initial vote is submitted
+    if (hiddenProfilesPhase.value === 'reading' || !hasCompletedVoting.value) {
+      return false // Don't start timer during reading phase or before initial vote
+    }
+  }
+  return true
+}
+
 const startLocalTimer = () => {
+  // Check if we should start the timer (for Hidden Profiles, wait until initial vote is submitted)
+  if (!shouldStartSessionTimer()) {
+    const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+    if (isHiddenProfiles) {
+      if (hiddenProfilesPhase.value === 'reading') {
+        console.log('⏸️ Hidden Profiles: Not starting session timer during reading phase')
+      } else if (!hasCompletedVoting.value) {
+        console.log('⏸️ Hidden Profiles: Not starting session timer - waiting for initial vote submission')
+      }
+    }
+    return
+  }
+  
   if (localTimerInterval.value) {
     clearInterval(localTimerInterval.value)
   }
@@ -1953,11 +2726,16 @@ const startLocalTimer = () => {
   localTimerInterval.value = setInterval(() => {
     // Only update if experiment is running and we have time remaining
     if (gameState.value.experiment_config?.experiment_status === 'running' && isTimerRunning.value) {
+      // For Hidden Profiles after vote submission, always use local calculation
+      // (ignore WebSocket updates to prevent stale backend values from overwriting)
+      const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+      const useLocalCalculation = isHiddenProfiles && hasCompletedVoting.value && timerStartedAfterVoteAt.value > 0
+      
       // Check if we've received a recent WebSocket update
       const timeSinceLastWebSocketUpdate = Date.now() - lastWebSocketTimerUpdate.value
       const hasRecentWebSocketUpdate = timeSinceLastWebSocketUpdate < timerUpdateThreshold
       
-      if (!hasRecentWebSocketUpdate) {
+      if (!hasRecentWebSocketUpdate || useLocalCalculation) {
         // Calculate time remaining based on elapsed time since start
         const elapsedSeconds = Math.floor((Date.now() - timerStartTime.value) / 1000)
         const calculatedTimeRemaining = Math.max(0, timerInitialDuration.value - elapsedSeconds)
@@ -1975,6 +2753,7 @@ const startLocalTimer = () => {
       } else {
         // If we have recent WebSocket updates, use them to keep the timer synchronized
         // This prevents the local timer from drifting away from the server
+        // (but not for Hidden Profiles after vote submission)
       }
     }
   }, 1000) // Update every second
@@ -2091,6 +2870,18 @@ const sessionStatusMessage = computed(() => {
       return 'Unknown status'
   }
 })
+
+// Watch for session status changes to trigger decision popup (for Hidden Profiles)
+watch(() => [stableSessionStatus.value, gameState.value.session_status?.time_remaining], ([status, timeRemaining]) => {
+  if (interfaceConfig.value.myAction?.type === 'hiddenprofiles' && 
+      hiddenProfilesPhase.value === 'discussion' && 
+      status === 'session_completed' && 
+      !showDecisionPopup.value) {
+    // Discussion phase ended, show decision popup
+    hiddenProfilesPhase.value = 'decision'
+    showDecisionPopup.value = true
+  }
+}, { deep: true })
 
 // Debug computed property to help understand session state
 const sessionDebugInfo = computed(() => {
@@ -2334,6 +3125,11 @@ const loadAwarenessDashboardData = async () => {
 
 // Communication mode computed properties
 const communicationLevel = computed(() => {
+  // Force broadcast mode for hiddenprofiles experiment
+  const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+  if (isHiddenProfiles) {
+    return 'broadcast'
+  }
   const level = gameState.value.communication_level || 'chat'
   return level
 })
@@ -2545,6 +3341,15 @@ const isHinter = computed(() => {
 })
 
 // Watch for experiment type changes and reconfigure interface
+// Watch for game state changes to load Hidden Profiles data
+watch(() => [gameState.value.participant, gameState.value.public_state], async (newVal, oldVal) => {
+  if (interfaceConfig.value.myAction?.type === 'hiddenprofiles') {
+    await loadAllCandidateDocuments()
+    await loadCandidateNames() // Load candidate names when public_state changes
+    await loadCurrentVote()
+  }
+}, { deep: true })
+
 watch(() => gameState.value.experiment_config?.experiment_type, async (newType, oldType) => {
   if (newType && newType !== oldType) {
     console.log('🔧 Experiment type changed from', oldType, 'to', newType, '- reconfiguring interface')
@@ -2809,6 +3614,21 @@ const hideRulesIfClickedOutside = (event: Event) => {
   if (event.target === event.currentTarget) {
     hideRulesPopup()
   }
+}
+
+const handleWordGuessed = () => {
+  showWordGuessedPopup.value = false
+  // Mark session as ended to show the session overlay
+  sessionHasEnded.value = true
+  if (gameState.value.experiment_config) {
+    gameState.value.experiment_config.experiment_status = 'completed'
+  }
+  stableSessionStatus.value = 'completed'
+}
+
+const hideWordGuessedPopupIfClickedOutside = (event: Event) => {
+  // Don't allow closing by clicking outside - user must click OK
+  // This ensures they see the message
 }
 
 const selectPlayer = (participant: Participant) => {
@@ -3847,20 +4667,33 @@ const startSessionAfterCountdown = async () => {
         }
         gameState.value.experiment_config.experiment_status = 'running'
         
-        // Get session duration from config or use default
-        const sessionDuration = gameState.value.experiment_config?.sessionDuration || 15
-        const timeRemainingSeconds = sessionDuration * 60
+        // For Hidden Profiles, don't start session timer yet - wait for initial vote submission
+        const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+        const isInReadingPhase = isHiddenProfiles && hiddenProfilesPhase.value === 'reading'
+        const hasNotVoted = isHiddenProfiles && !hasCompletedVoting.value
         
-        // Initialize timer immediately
-        timeRemaining.value = timeRemainingSeconds
-        timerStartTime.value = Date.now()
-        timerInitialDuration.value = timeRemainingSeconds
-        isTimerRunning.value = true
-        
-        // Start local timer immediately for smooth countdown
-        startLocalTimer()
-        
-        console.log('✅ Session status updated to running, timer started immediately')
+        if (!isInReadingPhase && !hasNotVoted) {
+          // Get session duration from config or use default
+          const sessionDuration = gameState.value.experiment_config?.sessionDuration || 15
+          const timeRemainingSeconds = sessionDuration * 60
+          
+          // Initialize timer immediately
+          timeRemaining.value = timeRemainingSeconds
+          timerStartTime.value = Date.now()
+          timerInitialDuration.value = timeRemainingSeconds
+          isTimerRunning.value = true
+          
+          // Start local timer immediately for smooth countdown
+          startLocalTimer()
+          
+          console.log('✅ Session status updated to running, timer started immediately')
+        } else {
+          if (isInReadingPhase) {
+            console.log('⏸️ Hidden Profiles: Session started but timer will start after reading phase ends')
+          } else if (hasNotVoted) {
+            console.log('⏸️ Hidden Profiles: Session started but timer will start after initial vote is submitted')
+          }
+        }
         
         // Immediately check real-time status to ensure synchronization
         checkSessionStatusRealTime()
@@ -4000,8 +4833,16 @@ const sendMessage = async () => {
     })
 
     if (response.ok) {
+      const result = await response.json()
       const justSent = newMessage.value.trim()
       newMessage.value = ''
+      
+      // Check if this was a correct guess in wordguessing
+      if (isWordGuessingExperiment.value && (result.is_correct_guess === true || result.word_guessed === true)) {
+        console.log('Word guessed correctly!', result)
+        showWordGuessedPopup.value = true
+      }
+      
       // Mark messages as read when user sends a message
       markMessagesAsRead()
       
@@ -4059,8 +4900,16 @@ const sendBroadcastMessage = async () => {
     })
 
     if (response.ok) {
+      const result = await response.json()
       const justSent = newMessage.value.trim()
       newMessage.value = ''
+      
+      // Check if this was a correct guess in wordguessing
+      if (isWordGuessingExperiment.value && (result.is_correct_guess === true || result.word_guessed === true)) {
+        console.log('Word guessed correctly!', result)
+        showWordGuessedPopup.value = true
+      }
+      
       // Mark messages as read when user sends a broadcast message
       markMessagesAsRead()
       
@@ -4376,6 +5225,26 @@ const loadGameStateIncremental = async () => {
             }
           }
           
+          // Update Hidden Profiles specific fields
+          if (apiGameState.private_state.candidate_document !== undefined) {
+            if (shouldApplyUpdate('participant.candidate_document', apiGameState.private_state.candidate_document, updateTimestamp)) {
+              if (!gameState.value.participant) gameState.value.participant = {}
+              gameState.value.participant.candidate_document = apiGameState.private_state.candidate_document
+            }
+          }
+          if (apiGameState.private_state.public_info !== undefined) {
+            if (shouldApplyUpdate('participant.public_info', apiGameState.private_state.public_info, updateTimestamp)) {
+              if (!gameState.value.participant) gameState.value.participant = {}
+              gameState.value.participant.public_info = apiGameState.private_state.public_info
+            }
+          }
+          if (apiGameState.private_state.vote !== undefined) {
+            if (shouldApplyUpdate('participant.vote', apiGameState.private_state.vote, updateTimestamp)) {
+              if (!gameState.value.participant) gameState.value.participant = {}
+              gameState.value.participant.vote = apiGameState.private_state.vote
+            }
+          }
+          
           // Update other participant fields
           const fieldsToUpdate = [
             { key: 'participant.shape', value: apiGameState.private_state.specialty_shape },
@@ -4411,10 +5280,16 @@ const loadGameStateIncremental = async () => {
           gameState.value.participants = newParticipants
         }
         
-        // Update communication level only if different
-        const newCommunicationLevel = data.communication_level || 'chat'
-        if (shouldApplyUpdate('communication_level', newCommunicationLevel, updateTimestamp)) {
-          gameState.value.communication_level = newCommunicationLevel
+        // Update communication level only if different (but force broadcast for hiddenprofiles)
+        const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+        if (!isHiddenProfiles) {
+          const newCommunicationLevel = data.communication_level || 'chat'
+          if (shouldApplyUpdate('communication_level', newCommunicationLevel, updateTimestamp)) {
+            gameState.value.communication_level = newCommunicationLevel
+          }
+        } else {
+          // Force broadcast mode for hiddenprofiles
+          gameState.value.communication_level = 'broadcast'
         }
         
         // Update awareness dashboard setting only if different
@@ -4426,7 +5301,9 @@ const loadGameStateIncremental = async () => {
         // Update experiment config fields only if different
         if (apiGameState.public_state?.experiment_config) {
           const configFields = [
-            'experiment_type', 'specialtyCost', 'regularCost', 'maxProductionNum', 'minTradePrice', 'maxTradePrice'
+            'experiment_type', 'specialtyCost', 'regularCost', 'maxProductionNum', 'minTradePrice', 'maxTradePrice',
+            'sessionDuration', 'numRounds', 'roundDuration', 'startingMoney', 'productionTime', 'incentiveMoney',
+            'numShapeTypes', 'shapesPerOrder', 'agentPerceptionTimeWindow'
           ]
           
           configFields.forEach(field => {
@@ -4436,9 +5313,48 @@ const loadGameStateIncremental = async () => {
               if (shouldApplyUpdate(configKey, newValue, updateTimestamp)) {
                 if (!gameState.value.experiment_config) gameState.value.experiment_config = {}
                 gameState.value.experiment_config[field] = newValue
+                console.log(`✅ Updated experiment_config.${field} to:`, newValue)
               }
             }
           })
+          
+          // Update hiddenProfiles config if present (for Hidden Profiles experiment)
+          if (apiGameState.public_state.experiment_config.hiddenProfiles) {
+            const hiddenProfilesConfig = apiGameState.public_state.experiment_config.hiddenProfiles
+            if (!gameState.value.experiment_config) gameState.value.experiment_config = {}
+            if (!gameState.value.experiment_config.hiddenProfiles) {
+              gameState.value.experiment_config.hiddenProfiles = {}
+            }
+            
+            // Update readingTimeMinutes if present
+            if (hiddenProfilesConfig.readingTimeMinutes !== undefined) {
+              const configKey = 'experiment_config.hiddenProfiles.readingTimeMinutes'
+              if (shouldApplyUpdate(configKey, hiddenProfilesConfig.readingTimeMinutes, updateTimestamp)) {
+                gameState.value.experiment_config.hiddenProfiles.readingTimeMinutes = hiddenProfilesConfig.readingTimeMinutes
+                console.log(`✅ Updated experiment_config.hiddenProfiles.readingTimeMinutes to:`, hiddenProfilesConfig.readingTimeMinutes)
+                
+                // If reading timer is running, update it with the new value
+                if (readingTimerInterval && hiddenProfilesConfig.readingTimeMinutes) {
+                  const newReadingTimeSeconds = hiddenProfilesConfig.readingTimeMinutes * 60
+                  if (readingTimeTotal.value > 0) {
+                    const progress = readingTimeRemaining.value / readingTimeTotal.value
+                    readingTimeRemaining.value = Math.max(0, Math.floor(newReadingTimeSeconds * progress))
+                  } else {
+                    readingTimeRemaining.value = newReadingTimeSeconds
+                  }
+                  readingTimeTotal.value = newReadingTimeSeconds
+                  console.log('⏰ Reading timer updated with new duration from game state:', hiddenProfilesConfig.readingTimeMinutes, 'minutes')
+                }
+              }
+            }
+            
+            // Merge other hiddenProfiles config fields
+            Object.keys(hiddenProfilesConfig).forEach(key => {
+              if (key !== 'readingTimeMinutes') {
+                gameState.value.experiment_config.hiddenProfiles[key] = hiddenProfilesConfig[key]
+              }
+            })
+          }
         }
         
         // Update experiment status from public state if available
@@ -4459,6 +5375,13 @@ const loadGameStateIncremental = async () => {
           } else {
           }
         } else {
+        }
+        
+        // Update full public_state for Hidden Profiles and other experiments
+        if (apiGameState.public_state) {
+          if (!gameState.value.public_state) gameState.value.public_state = {}
+          // Merge public_state fields, preserving existing values if API doesn't provide them
+          Object.assign(gameState.value.public_state, apiGameState.public_state)
         }
         
       }
@@ -4561,6 +5484,10 @@ const loadGameState = async () => {
           participant: apiGameState.private_state ? {
             participant_id: participantCode,
             money: apiGameState.private_state.money || data.participant?.money || 0,
+            // Hidden Profiles specific fields
+            candidate_document: apiGameState.private_state.candidate_document || null,
+            public_info: apiGameState.private_state.public_info || null,
+            vote: apiGameState.private_state.vote || null,
             // Convert inventory from JSON objects to shape names array
             shapes_acquired: (() => {
               const inventory = apiGameState.private_state.inventory || []
@@ -4692,7 +5619,9 @@ const loadGameState = async () => {
               // Otherwise, use current status or default to idle
               return currentExperimentStatus || 'idle'
             })()
-          }
+          },
+          // Store full public_state for Hidden Profiles and other experiments
+          public_state: apiGameState.public_state || {}
         }
         
         console.log('Mapped game state:', gameState.value)
@@ -4770,7 +5699,7 @@ const loadMessages = async () => {
       return
     }
 
-    const response = await fetch(`${BACKEND_URL}/api/messages?session_code=${encodeURIComponent(sessionId.value)}`, {
+    const response = await fetch(`/api/messages?session_code=${encodeURIComponent(sessionId.value)}`, {
       headers: {
         'Authorization': `Bearer ${authToken}`,
         'Content-Type': 'application/json'
@@ -5029,7 +5958,10 @@ const loadMockGameState = () => {
 }
 
 const initializeWebSocket = () => {
-  socket = io(BACKEND_URL, {
+  // Use relative path for Socket.IO to work with ngrok/proxy
+  // Empty string or undefined will use current origin (same domain)
+  const socketUrl = BACKEND_URL || undefined
+  socket = io(socketUrl, {
     transports: ['websocket', 'polling'],
     timeout: 60000, // Match server ping_timeout
     reconnection: true,
@@ -5154,9 +6086,52 @@ const initializeWebSocket = () => {
     
     // Always update the timer with WebSocket values when experiment is running
     // This ensures the timer stays synchronized with the server
+    // BUT for Hidden Profiles, ignore timer updates during reading phase or before initial vote
     if (data.experiment_status === 'running') {
+      const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+      const isInReadingPhase = isHiddenProfiles && hiddenProfilesPhase.value === 'reading'
+      const hasNotVoted = isHiddenProfiles && !hasCompletedVoting.value
       
-      // Update the timer value
+      // For Hidden Profiles, ignore timer updates during reading phase or before vote submission
+      if (isHiddenProfiles && (isInReadingPhase || hasNotVoted)) {
+        console.log('⏸️ Hidden Profiles: Ignoring timer update - reading phase or vote not submitted yet')
+        return // Don't process timer updates yet
+      }
+      
+      // For Hidden Profiles after vote submission, use local timer countdown as source of truth
+      // The backend timer may have stale values, so we ignore WebSocket updates and let local timer run
+      if (isHiddenProfiles && hasCompletedVoting.value && timerStartedAfterVoteAt.value > 0) {
+        // We have a local timer running that was started after vote submission
+        // Calculate what the time should be based on our local countdown
+        const sessionDuration = gameState.value.experiment_config?.sessionDuration || 15
+        const fullSessionDuration = sessionDuration * 60
+        const timeSinceVoteStart = Date.now() - timerStartedAfterVoteAt.value
+        const expectedRemaining = Math.max(0, fullSessionDuration - Math.floor(timeSinceVoteStart / 1000))
+        
+        // Always use our local countdown calculation, ignore backend value
+        // This ensures the timer counts down from the full session duration
+        timeRemaining.value = expectedRemaining
+        lastWebSocketTimerUpdate.value = eventTimestamp
+        
+        // Update session status with our calculated value
+        if (!gameState.value.session_status) {
+          gameState.value.session_status = {}
+        }
+        gameState.value.session_status.time_remaining = expectedRemaining
+        
+        // Make sure local timer is running
+        if (!isTimerRunning.value) {
+          timerStartTime.value = timerStartedAfterVoteAt.value
+          timerInitialDuration.value = fullSessionDuration
+          isTimerRunning.value = true
+          startLocalTimer()
+        }
+        
+        console.log(`⏸️ Hidden Profiles: Using local countdown (${expectedRemaining}s) - ignoring backend value (${data.time_remaining}s)`)
+        return // Don't process backend timer update
+      }
+      
+      // Update the timer value (for non-Hidden Profiles or before vote submission)
       timeRemaining.value = data.time_remaining
       lastWebSocketTimerUpdate.value = eventTimestamp
       
@@ -5220,11 +6195,24 @@ const initializeWebSocket = () => {
           case 'running':
             console.log('✅ Experiment status updated to running via WebSocket')
             if (!isTimerRunning.value) {
-              // Initialize timer with the time from WebSocket
-              timeRemaining.value = data.time_remaining || 900
-              timerStartTime.value = Date.now()
-              timerInitialDuration.value = data.time_remaining || 900
-              startLocalTimer() // Start local timer for smooth countdown
+              // For Hidden Profiles, don't start timer if we're in reading phase or haven't submitted initial vote
+              const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+              const isInReadingPhase = isHiddenProfiles && hiddenProfilesPhase.value === 'reading'
+              const hasNotVoted = isHiddenProfiles && !hasCompletedVoting.value
+              
+              if (!isInReadingPhase && !hasNotVoted) {
+                // Initialize timer with the time from WebSocket
+                timeRemaining.value = data.time_remaining || 900
+                timerStartTime.value = Date.now()
+                timerInitialDuration.value = data.time_remaining || 900
+                startLocalTimer() // Start local timer for smooth countdown
+              } else {
+                if (isInReadingPhase) {
+                  console.log('⏸️ Hidden Profiles: Session running but timer will start after reading phase ends')
+                } else if (hasNotVoted) {
+                  console.log('⏸️ Hidden Profiles: Session running but timer will start after initial vote is submitted')
+                }
+              }
             }
             
             // If session just started running and we have an auto-start popup open, close it
@@ -5240,6 +6228,14 @@ const initializeWebSocket = () => {
           case 'completed':
             console.log('✅ Experiment status updated to completed via WebSocket')
             stopLocalTimer() // Stop local timer when completed
+            
+            // For Hidden Profiles, show final vote popup when session ends
+            const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+            if (isHiddenProfiles && hiddenProfilesPhase.value === 'discussion' && !showDecisionPopup.value) {
+              console.log('📋 Hidden Profiles: Session ended - showing final vote popup')
+              hiddenProfilesPhase.value = 'decision'
+              showDecisionPopup.value = true
+            }
             break
           case 'idle':
             console.log('⏳ Experiment status updated to idle via WebSocket')
@@ -5348,8 +6344,24 @@ const initializeWebSocket = () => {
       }
     }
     
+    // Check if this is a correct guess in wordguessing
+    if (data.is_correct_guess === true || data.word_guessed === true) {
+      console.log('Word guessed correctly!', data)
+      if (isWordGuessingExperiment.value && data.session_code === sessionId.value) {
+        showWordGuessedPopup.value = true
+      }
+    }
+    
     // Mark event as processed
     markEventProcessed(eventId)
+  })
+
+  // Listen for word_guessed event (emitted when any guesser gets the word right)
+  socket.on('word_guessed', (data: any) => {
+    console.log('Word guessed event received:', data)
+    if (isWordGuessingExperiment.value && data.session_code === sessionId.value) {
+      showWordGuessedPopup.value = true
+    }
   })
 
   socket.on('new_trade_offer', (data: any) => {
@@ -5889,16 +6901,138 @@ const initializeWebSocket = () => {
       return
     }
     
-    // Update communication level if provided
-    if (data.communicationLevel) {
+    // Update communication level if provided (but force broadcast for hiddenprofiles)
+    const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+    if (data.communicationLevel && !isHiddenProfiles) {
       gameState.value.communication_level = data.communicationLevel
       console.log('✅ Communication level updated via WebSocket:', data.communicationLevel)
+    } else if (isHiddenProfiles) {
+      // Force broadcast mode for hiddenprofiles
+      gameState.value.communication_level = 'broadcast'
+      console.log('✅ Hidden Profiles: Communication level forced to broadcast via WebSocket')
     }
     
     // Update awareness dashboard setting if provided
     if (data.awarenessDashboard !== undefined) {
       gameState.value.awareness_dashboard_enabled = data.awarenessDashboard === 'on'
       console.log('✅ Awareness dashboard setting updated via WebSocket:', data.awarenessDashboard)
+    }
+    
+    // Update session duration if provided
+    if (data.sessionDuration !== undefined) {
+      if (!gameState.value.experiment_config) {
+        gameState.value.experiment_config = {}
+      }
+      gameState.value.experiment_config.sessionDuration = data.sessionDuration
+      console.log('✅ Session duration updated via WebSocket:', data.sessionDuration, 'minutes')
+      
+      // Update timer if it's running
+      if (isTimerRunning.value && timerStartTime.value) {
+        const elapsed = (Date.now() - timerStartTime.value) / 1000
+        const newTotalSeconds = data.sessionDuration * 60
+        timeRemaining.value = Math.max(0, newTotalSeconds - elapsed)
+        timerInitialDuration.value = newTotalSeconds
+        console.log('⏰ Session timer updated with new duration:', data.sessionDuration, 'minutes')
+      }
+    }
+    
+    // Update hiddenProfiles config if provided
+    if (data.hiddenProfiles) {
+      if (!gameState.value.experiment_config) {
+        gameState.value.experiment_config = {}
+      }
+      if (!gameState.value.experiment_config.hiddenProfiles) {
+        gameState.value.experiment_config.hiddenProfiles = {}
+      }
+      gameState.value.experiment_config.hiddenProfiles = {
+        ...gameState.value.experiment_config.hiddenProfiles,
+        ...data.hiddenProfiles
+      }
+      console.log('✅ Hidden Profiles config updated via WebSocket')
+    }
+    
+    // Update session duration if provided
+    if (data.sessionDuration !== undefined && data.sessionDuration !== null) {
+      if (!gameState.value.experiment_config) {
+        gameState.value.experiment_config = {}
+      }
+      gameState.value.experiment_config.sessionDuration = data.sessionDuration
+      console.log('✅ Session duration updated via WebSocket:', data.sessionDuration)
+      
+      // If timer is running, recalculate time remaining based on new duration
+      if (isTimerRunning.value && timerStartTime.value) {
+        const elapsed = (Date.now() - timerStartTime.value) / 1000
+        const newTotalSeconds = data.sessionDuration * 60
+        timeRemaining.value = Math.max(0, newTotalSeconds - elapsed)
+        timerInitialDuration.value = newTotalSeconds
+        console.log('⏰ Session timer updated with new duration:', data.sessionDuration, 'minutes')
+      }
+    }
+    
+    // Update hiddenProfiles config if provided
+    if (data.hiddenProfiles) {
+      if (!gameState.value.experiment_config) {
+        gameState.value.experiment_config = {}
+      }
+      if (!gameState.value.experiment_config.hiddenProfiles) {
+        gameState.value.experiment_config.hiddenProfiles = {}
+      }
+      // Merge the hiddenProfiles config
+      Object.assign(gameState.value.experiment_config.hiddenProfiles, data.hiddenProfiles)
+      console.log('✅ Hidden Profiles config updated via WebSocket:', data.hiddenProfiles)
+      
+      // If reading timer is running and readingTimeMinutes changed, update it
+      if (data.hiddenProfiles.readingTimeMinutes && readingTimerInterval) {
+        const newReadingTimeSeconds = data.hiddenProfiles.readingTimeMinutes * 60
+        // Adjust remaining time proportionally
+        if (readingTimeTotal.value > 0) {
+          const progress = readingTimeRemaining.value / readingTimeTotal.value
+          readingTimeRemaining.value = Math.max(0, Math.floor(newReadingTimeSeconds * progress))
+        } else {
+          readingTimeRemaining.value = newReadingTimeSeconds
+        }
+        readingTimeTotal.value = newReadingTimeSeconds
+        console.log('⏰ Reading timer updated with new duration:', data.hiddenProfiles.readingTimeMinutes, 'minutes')
+      }
+    }
+  })
+  
+  // Listen for full experiment config updates
+  socket.on('experiment_config_updated', (data: any) => {
+    console.log('Full experiment config update received:', data)
+    
+    // Only process updates for the current session
+    if (data.session_code && data.session_code !== sessionId.value) {
+      console.log('⏱️ Ignoring experiment config update for different session:', data.session_code)
+      return
+    }
+    
+    // Update the full experiment config
+    if (data.config) {
+      gameState.value.experiment_config = data.config
+      console.log('✅ Full experiment config updated via WebSocket')
+      
+      // Update session timer if duration changed and timer is running
+      if (data.config.sessionDuration && isTimerRunning.value && timerStartTime.value) {
+        const elapsed = (Date.now() - timerStartTime.value) / 1000
+        const newTotalSeconds = data.config.sessionDuration * 60
+        timeRemaining.value = Math.max(0, newTotalSeconds - elapsed)
+        timerInitialDuration.value = newTotalSeconds
+        console.log('⏰ Session timer updated with new duration from full config:', data.config.sessionDuration, 'minutes')
+      }
+      
+      // Update reading timer if readingTimeMinutes changed and timer is running
+      if (data.config.hiddenProfiles?.readingTimeMinutes && readingTimerInterval) {
+        const newReadingTimeSeconds = data.config.hiddenProfiles.readingTimeMinutes * 60
+        if (readingTimeTotal.value > 0) {
+          const progress = readingTimeRemaining.value / readingTimeTotal.value
+          readingTimeRemaining.value = Math.max(0, Math.floor(newReadingTimeSeconds * progress))
+        } else {
+          readingTimeRemaining.value = newReadingTimeSeconds
+        }
+        readingTimeTotal.value = newReadingTimeSeconds
+        console.log('⏰ Reading timer updated with new duration from full config:', data.config.hiddenProfiles.readingTimeMinutes, 'minutes')
+      }
     }
   })
 
@@ -5952,13 +7086,21 @@ const initializeWebSocket = () => {
         
         // Start/stop local timer based on experiment status
         if (data.experiment_status === 'running') {
-          // Initialize local timer with current game state time
-          if (gameState.value.session_status?.time_remaining) {
-            timeRemaining.value = gameState.value.session_status.time_remaining
-            console.log('⏰ Session status: Starting local timer with time:', timeRemaining.value)
-          }
-          if (!isTimerRunning.value) {
-            startLocalTimer() // Start local timer for smooth countdown
+          // For Hidden Profiles, don't start timer if we're in reading phase
+          const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+          const isInReadingPhase = isHiddenProfiles && hiddenProfilesPhase.value === 'reading'
+          
+          if (!isInReadingPhase) {
+            // Initialize local timer with current game state time
+            if (gameState.value.session_status?.time_remaining) {
+              timeRemaining.value = gameState.value.session_status.time_remaining
+              console.log('⏰ Session status: Starting local timer with time:', timeRemaining.value)
+            }
+            if (!isTimerRunning.value) {
+              startLocalTimer() // Start local timer for smooth countdown
+            }
+          } else {
+            console.log('⏸️ Hidden Profiles: Session running but timer will start after reading phase ends')
           }
           
           // If session just started running and we have an auto-start popup open, close it
@@ -6049,7 +7191,8 @@ const returnToLogin = () => {
   }
   
   // Redirect to the login page
-  window.location.href = `http://localhost:3000/login`
+  // Use relative path for redirect
+  window.location.href = '/login'
 }
 
 // Lifecycle
@@ -6169,12 +7312,20 @@ onMounted(async () => {
   await loadAllTradeData()
 
   // Initialize timer if experiment is already running
+  // For Hidden Profiles, don't start timer if we're in reading phase
   if (gameState.value.experiment_config?.experiment_status === 'running' && 
       gameState.value.session_status?.time_remaining) {
-    console.log('⏰ Page load: Experiment is running, initializing timer')
-    timeRemaining.value = gameState.value.session_status.time_remaining
-    if (!isTimerRunning.value) {
-      startLocalTimer()
+    const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+    const isInReadingPhase = isHiddenProfiles && hiddenProfilesPhase.value === 'reading'
+    
+    if (!isInReadingPhase) {
+      console.log('⏰ Page load: Experiment is running, initializing timer')
+      timeRemaining.value = gameState.value.session_status.time_remaining
+      if (!isTimerRunning.value) {
+        startLocalTimer()
+      }
+    } else {
+      console.log('⏰ Page load: Hidden Profiles - Timer will start after reading phase ends')
     }
   }
 
@@ -6195,9 +7346,22 @@ onMounted(async () => {
     }, 5000)
     
     // Store interval for cleanup
-    onUnmounted(() => {
-      clearInterval(essayRefreshInterval)
-    })
+  onUnmounted(() => {
+    clearInterval(essayRefreshInterval)
+  })
+  }
+
+  // Initialize Hidden Profiles phase if needed
+  if (interfaceConfig.value.myAction?.type === 'hiddenprofiles' && !hasStartedReading.value) {
+    hiddenProfilesPhase.value = 'rules'
+    
+    // Load reading time from config if available (so it's ready when user clicks "Start Reading")
+    const hiddenProfilesConfig = gameState.value.experiment_config?.hiddenProfiles || {}
+    const readingTimeMinutes = hiddenProfilesConfig.readingTimeMinutes || gameState.value.experiment_config?.readingTimeMinutes
+    if (readingTimeMinutes && readingTimeMinutes > 0) {
+      readingTimeTotal.value = readingTimeMinutes * 60
+      console.log('✅ Loaded reading time from config on mount:', readingTimeMinutes, 'minutes')
+    }
   }
 
   // Check if session should start automatically (only if not previously completed)
@@ -6422,6 +7586,12 @@ onMounted(async () => {
     clearInterval(cleanupCompletedItemsInterval)
     clearInterval(awarenessDashboardRefreshInterval)
     clearInterval(notificationDotsRefreshInterval)
+    
+    // Clean up Hidden Profiles reading timer
+    if (readingTimerInterval) {
+      clearInterval(readingTimerInterval)
+      readingTimerInterval = null
+    }
     clearInterval(sessionStatusMonitorInterval)
     clearInterval(autoStartStatusMonitorInterval)
     
@@ -6464,7 +7634,27 @@ watch(() => gameState.value.experiment_config?.experiment_status, (newStatus, ol
         console.log('⏰ Watch: Starting local timer with time:', timeRemaining.value)
       }
       if (!isTimerRunning.value) {
-        startLocalTimer() // Start local timer for smooth countdown
+        // For Hidden Profiles, don't start timer if we're in reading phase or haven't submitted initial vote
+        const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+        const isInReadingPhase = isHiddenProfiles && hiddenProfilesPhase.value === 'reading'
+        const hasNotVoted = isHiddenProfiles && !hasCompletedVoting.value
+        
+        if (!isInReadingPhase && !hasNotVoted) {
+          startLocalTimer() // Start local timer for smooth countdown
+        } else {
+          console.log('⏸️ Hidden Profiles: Timer will start after initial vote submission')
+        }
+      }
+    } else if (newStatus === 'completed') {
+      console.log('⏰ Watch: Stopping local timer - status:', newStatus)
+      stopLocalTimer() // Stop local timer when completed
+      
+      // For Hidden Profiles, show final vote popup when session ends
+      const isHiddenProfiles = gameState.value.experiment_config?.experiment_type === 'hiddenprofiles'
+      if (isHiddenProfiles && hiddenProfilesPhase.value === 'discussion' && !showDecisionPopup.value) {
+        console.log('📋 Hidden Profiles: Session ended - showing final vote popup')
+        hiddenProfilesPhase.value = 'decision'
+        showDecisionPopup.value = true
       }
     } else {
       console.log('⏰ Watch: Stopping local timer - status:', newStatus)
@@ -6740,7 +7930,7 @@ const cancelTradeOffer = async (offerId: string) => {
 const loadECLConfig = async () => {
   try {
     const authToken = sessionStorage.getItem('auth_token')
-    const response = await fetch(`${BACKEND_URL}/api/experiment/config?session_code=${sessionId.value}`, {
+    const response = await fetch(`/api/experiment/config?session_code=${sessionId.value}`, {
       headers: {
         'Authorization': `Bearer ${authToken}`
       }
@@ -6774,7 +7964,7 @@ const loadECLConfig = async () => {
 const loadECLState = async () => {
   try {
     const authToken = sessionStorage.getItem('auth_token')
-    const response = await fetch(`${BACKEND_URL}/api/experiment/ecl/state?session_code=${sessionId.value}&participant_code=${participantId.value}`, {
+    const response = await fetch(`/api/experiment/ecl/state?session_code=${sessionId.value}&participant_code=${participantId.value}`, {
       headers: {
         'Authorization': `Bearer ${authToken}`
       }
@@ -6825,7 +8015,7 @@ const executeECLAction = async (actionName, inputs) => {
     }
     
     const authToken = sessionStorage.getItem('auth_token')
-    const response = await fetch(`${BACKEND_URL}/api/experiment/ecl/action`, {
+    const response = await fetch(`/api/experiment/ecl/action`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -816,6 +816,18 @@ body {
     box-shadow: 0 2px 4px rgba(0,123,255,0.2);
 }
 
+.component-list-item.disabled {
+    opacity: 1;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.component-list-item.disabled:hover {
+    background: #f8f9fa;
+    transform: none;
+    box-shadow: none;
+}
+
 .component-module {
     border: 1px solid #dee2e6;
     border-radius: 4px;
@@ -999,13 +1011,106 @@ body {
 }
 
 .rules-popup-body {
-    padding: 16px;
+    padding: 22px;
 }
 
 .rules-popup-body p {
     margin-bottom: 10px;
     line-height: 1.5;
-    font-size: 13px;
+    font-size: 16px;
+}
+
+/* Word Guessed Popup (WordGuessing) */
+.word-guessed-popup {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 2000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.word-guessed-popup-content {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    max-width: 450px;
+    width: 90%;
+    overflow: hidden;
+    animation: popupSlideIn 0.3s ease-out;
+}
+
+@keyframes popupSlideIn {
+    from {
+        transform: scale(0.9) translateY(-20px);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1) translateY(0);
+        opacity: 1;
+    }
+}
+
+.word-guessed-popup-header {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    padding: 20px 24px;
+    text-align: center;
+}
+
+.word-guessed-popup-header h3 {
+    margin: 0;
+    color: white;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.word-guessed-popup-body {
+    padding: 24px;
+    text-align: center;
+}
+
+.word-guessed-popup-body p {
+    margin: 12px 0;
+    line-height: 1.6;
+    font-size: 16px;
+    color: #333;
+}
+
+.word-guessed-popup-body p strong {
+    color: #28a745;
+    font-size: 18px;
+}
+
+.word-guessed-popup-footer {
+    padding: 16px 24px 24px;
+    text-align: center;
+}
+
+.word-guessed-btn {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+    border: none;
+    padding: 12px 32px;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.word-guessed-btn:hover {
+    background: linear-gradient(135deg, #218838 0%, #1ea080 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+}
+
+.word-guessed-btn:active {
+    transform: translateY(0);
 }
 
 /* Main Content */

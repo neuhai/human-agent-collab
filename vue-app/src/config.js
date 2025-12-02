@@ -1,9 +1,10 @@
 // Backend configuration
-// Use a simple approach that works in both development and production
-// Change this URL to your server address when deploying
-const BACKEND_URL = 'http://localhost:5002' // Default for development
+// Use relative path to avoid CORS issues when deployed via ngrok
+// Vite proxy (in vite.config.js) will handle /api requests in development
+// In production/ngrok, relative paths work automatically
+const BACKEND_URL = ''
 
-// For production, uncomment and update the line below with your server URL:
+// For production with explicit backend URL, uncomment and update:
 // const BACKEND_URL = 'https://your-server-domain.com'
 
 export { BACKEND_URL }

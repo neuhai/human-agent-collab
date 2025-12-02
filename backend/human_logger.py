@@ -189,6 +189,15 @@ class HumanLogger:
         }
         self.log_action("make_investment", success, error_message, details)
     
+    def log_vote(self, candidate_name: str, vote_type: str, success: bool, error_message: str = None):
+        """Log vote submission for Hidden Profiles"""
+        details = {
+            "participant_code": self.participant_code,
+            "candidate_name": candidate_name,
+            "vote_type": vote_type  # "INITIAL" or "FINAL"
+        }
+        self.log_action("submit_vote", success, error_message, details)
+    
 
 
 

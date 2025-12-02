@@ -145,10 +145,31 @@ class AgentTools:
         public_state = game_engine.get_public_state(session_code)
         
         # Extract the participant data from the result for private_state
-        if participant_state_result.get('success'):
-            private_state = participant_state_result.get('participant', {})
-        else:
+        # Hidden Profiles returns data directly, other experiments return {success: bool, participant: {...}}
+        if participant_state_result.get('success') is not None:
+            # Standard structure: {success: bool, participant: {...}}
+            if participant_state_result.get('success'):
+                private_state = participant_state_result.get('participant', {})
+            else:
+                private_state = {}
+        elif participant_state_result.get('error'):
+            # Error case (Hidden Profiles returns {error: ...})
             private_state = {}
+        else:
+            # Hidden Profiles returns data directly: {public_info: ..., candidate_document: ..., ...}
+            # Use the result directly as private_state, but extract public_info to public_state if needed
+            private_state = participant_state_result
+            
+            # For Hidden Profiles, also ensure public_info is in public_state
+            # (get_public_state should already have it, but this is a fallback)
+            # Check if public_info is missing or None in public_state, and get it from participant state
+            if isinstance(public_state, dict):
+                public_info_in_public = public_state.get('public_info')
+                public_info_from_participant = participant_state_result.get('public_info')
+                
+                # If public_info is None or missing in public_state, but exists in participant state, use it
+                if (public_info_in_public is None or public_info_in_public == {}) and public_info_from_participant is not None:
+                    public_state['public_info'] = public_info_from_participant
         
         # Attach awareness flag to public state for downstream consumers
         if isinstance(public_state, dict):
@@ -180,7 +201,8 @@ class AgentTools:
             # CRITICAL FIX: Use session_code for proper session isolation
             if session_code:
                 cur.execute("""
-                    SELECT s.experiment_config->>'communicationLevel' as communication_level
+                    SELECT s.experiment_config->>'communicationLevel' as communication_level,
+                           s.experiment_type
                     FROM sessions s
                     WHERE s.session_code = %s
                     LIMIT 1
@@ -188,7 +210,8 @@ class AgentTools:
             else:
                 # Fallback to participant-based lookup if session_code not provided
                 cur.execute("""
-                    SELECT s.experiment_config->>'communicationLevel' as communication_level
+                    SELECT s.experiment_config->>'communicationLevel' as communication_level,
+                           s.experiment_type
                     FROM sessions s
                     JOIN participants p ON s.session_id = p.session_id
                     WHERE p.participant_code = %s
@@ -202,11 +225,17 @@ class AgentTools:
             # result is a dict (RealDictRow); access by key, not index
             communication_level = (result.get('communication_level') if result else None) or 'chat'
             communication_level = communication_level.lower()
+            experiment_type = result.get('experiment_type') if result else None
             
         except Exception as e:
             # If we can't get the communication level, default to 'chat' for testing
             print(f"Warning: Could not get communication level for {participant_code}: {e}")
             communication_level = 'chat'  # Default to chat mode
+            experiment_type = None
+        
+        # For Hidden Profiles, "group_chat" should be treated as broadcast mode
+        if experiment_type == 'hiddenprofiles' and communication_level == 'group_chat':
+            communication_level = 'broadcast'
         
         # Check communication level restrictions
         if communication_level == 'no_chat':
@@ -497,6 +526,48 @@ class AgentTools:
             return {
                 "success": False,
                 "error": f"Failed to get investment history: {str(e)}"
+            }
+
+    # --------- Hidden Profiles-specific methods ---------
+
+    def submit_vote(self, participant_code: str, candidate_name: str, session_code: str = None) -> Dict[str, Any]:
+        """Submit a vote for a candidate name in Hidden Profiles experiment"""
+        try:
+            # Get the appropriate game engine based on experiment type
+            game_engine = self._get_game_engine(participant_code, session_code)
+            
+            # Check if it's a HiddenProfileGameEngine
+            from hiddenprofile_game_engine import HiddenProfileGameEngine
+            if isinstance(game_engine, HiddenProfileGameEngine):
+                return game_engine.submit_vote(participant_code, candidate_name, session_code)
+            else:
+                return {
+                    "success": False,
+                    "error": "This method is only available for Hidden Profiles experiments"
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def get_assigned_documents(self, participant_code: str, session_code: str = None) -> Dict[str, Any]:
+        """Get assigned documents (public info + candidate doc) for a participant in Hidden Profiles experiment"""
+        try:
+            # Get the appropriate game engine based on experiment type
+            game_engine = self._get_game_engine(participant_code, session_code)
+            
+            # Check if it's a HiddenProfileGameEngine
+            from hiddenprofile_game_engine import HiddenProfileGameEngine
+            if isinstance(game_engine, HiddenProfileGameEngine):
+                return game_engine.get_assigned_documents(participant_code, session_code)
+            else:
+                return {
+                    "error": "This method is only available for Hidden Profiles experiments"
+                }
+        except Exception as e:
+            return {
+                "error": str(e)
             }
 
     # --------- Essay Ranking-specific methods ---------
@@ -1138,6 +1209,29 @@ class AgentTools:
                     "required": ["participant_code"],
                 },
             },
+            {
+                "name": "submit_vote",
+                "description": "Submit a vote for a candidate name in Hidden Profiles experiment. Only available in Hidden Profiles sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                        "candidate_name": {"type": "string", "description": "Name of the candidate to vote for (must match one of the candidate names in the session)"},
+                    },
+                    "required": ["participant_code", "candidate_name"],
+                },
+            },
+            {
+                "name": "get_assigned_documents",
+                "description": "Get assigned documents (public information and candidate document) for a participant in Hidden Profiles experiment. Only available in Hidden Profiles sessions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "participant_code": {"type": "string"},
+                    },
+                    "required": ["participant_code"],
+                },
+            },
         ]
 
         if api_provider == 'anthropic':
@@ -1250,6 +1344,18 @@ class AgentTools:
             # CRITICAL FIX: Extract session_code from arguments if available for proper session isolation
             session_code = arguments.get("session_code")
             return self.get_assigned_words(arguments["participant_code"], session_code)
+        elif name == "submit_vote":
+            # CRITICAL FIX: Extract session_code from arguments if available for proper session isolation
+            session_code = arguments.get("session_code")
+            return self.submit_vote(
+                arguments["participant_code"], 
+                arguments["candidate_name"], 
+                session_code
+            )
+        elif name == "get_assigned_documents":
+            # CRITICAL FIX: Extract session_code from arguments if available for proper session isolation
+            session_code = arguments.get("session_code")
+            return self.get_assigned_documents(arguments["participant_code"], session_code)
         else:
             return {
                 "success": False,

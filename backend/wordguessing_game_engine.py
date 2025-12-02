@@ -503,13 +503,13 @@ class WordGuessingGameEngine:
             # Get participant data
             if session_code:
                 cur.execute("""
-                    SELECT participant_id, role, current_round, assigned_words, session_code
+                    SELECT participant_id, role, session_code
                     FROM participants
                     WHERE participant_code = %s AND session_code = %s
                 """, (participant_code, session_code))
             else:
                 cur.execute("""
-                    SELECT participant_id, role, current_round, assigned_words, session_code
+                    SELECT participant_id, role, session_code
                     FROM participants
                     WHERE participant_code = %s
                 """, (participant_code,))
@@ -522,7 +522,7 @@ class WordGuessingGameEngine:
             if participant_data["role"] != "guesser":
                 return {"success": False, "message": "Only guessers can submit guesses"}
             
-            # Get current word for the round (from hinters' assigned words)
+            # Get the word to be guessed (from hinters' assigned words)
             cur.execute("""
                 SELECT assigned_words
                 FROM participants
@@ -532,14 +532,14 @@ class WordGuessingGameEngine:
             
             hinter_data = cur.fetchone()
             if not hinter_data:
-                return {"success": False, "message": "No hinter found for current round"}
+                return {"success": False, "message": "No hinter found"}
             
             assigned_words = hinter_data["assigned_words"]
             if isinstance(assigned_words, str):
                 assigned_words = json.loads(assigned_words)
             
-            # Check if guess is correct (simple text matching for now)
-            current_word = assigned_words[participant_data["current_round"] - 1] if assigned_words else ""
+            # Get the first word (there's only one word to be guessed)
+            current_word = assigned_words[0] if assigned_words and len(assigned_words) > 0 else ""
             is_correct = guess_text.lower().strip() == current_word.lower().strip()
             
             # Insert guess into chat history
@@ -551,7 +551,7 @@ class WordGuessingGameEngine:
                     %s, %s, %s, %s
                 )
             """, (participant_code, participant_data["session_code"], participant_data["participant_id"], 
-                 guess_text, is_correct, participant_data["current_round"]))
+                 guess_text, is_correct, 1))  # Always round 1 since there's only one word to guess
             
             # Update score if correct
             if is_correct:
@@ -606,22 +606,22 @@ class WordGuessingGameEngine:
             session_code: Session code
             
         Returns:
-            Dictionary containing message status
+            Dictionary containing message status and guess verification result
         """
         try:
             conn = self._get_db_connection()
             cur = conn.cursor()
             
-            # Get sender participant
+            # Get sender participant with role information
             if session_code:
                 cur.execute("""
-                    SELECT participant_id, session_id, session_code
+                    SELECT participant_id, session_id, session_code, role
                     FROM participants
                     WHERE participant_code = %s AND session_code = %s
                 """, (participant_code, session_code))
             else:
                 cur.execute("""
-                    SELECT participant_id, session_id, session_code
+                    SELECT participant_id, session_id, session_code, role
                     FROM participants
                     WHERE participant_code = %s
                 """, (participant_code,))
@@ -631,7 +631,7 @@ class WordGuessingGameEngine:
                 return {"success": False, "message": "Sender not found"}
             
             recipient_id = None
-            if recipient_code:
+            if recipient_code and recipient_code != "all":
                 cur.execute("""
                     SELECT participant_id
                     FROM participants
@@ -641,6 +641,46 @@ class WordGuessingGameEngine:
                 recipient_data = cur.fetchone()
                 if recipient_data:
                     recipient_id = recipient_data["participant_id"]
+            
+            # Check if sender is a guesser and verify if the message is a correct guess
+            is_correct_guess = False
+            if sender_data["role"] == "guesser":
+                # Get the word to be guessed (from hinters' assigned words)
+                cur.execute("""
+                    SELECT assigned_words
+                    FROM participants
+                    WHERE session_code = %s AND role = 'hinter'
+                    LIMIT 1
+                """, (sender_data["session_code"],))
+                
+                hinter_data = cur.fetchone()
+                if hinter_data:
+                    assigned_words = hinter_data["assigned_words"]
+                    if isinstance(assigned_words, str):
+                        assigned_words = json.loads(assigned_words)
+                    
+                    # Get the first word (there's only one word to be guessed)
+                    current_word = assigned_words[0] if assigned_words and len(assigned_words) > 0 else ""
+                    if current_word:
+                        is_correct_guess = content.lower().strip() == current_word.lower().strip()
+                        
+                        # If correct, record it in chat history and update score
+                        if is_correct_guess:
+                            cur.execute("""
+                                INSERT INTO wordguessing_chat_history (
+                                    session_id, participant_id, guess_text, is_correct, round_number
+                                ) VALUES (%s, %s, %s, %s, %s)
+                            """, (
+                                sender_data["session_id"], sender_data["participant_id"], 
+                                content, True, 1  # Always round 1 since there's only one word to guess
+                            ))
+                            
+                            # Update score
+                            cur.execute("""
+                                UPDATE participants 
+                                SET score = score + 1
+                                WHERE participant_code = %s AND session_code = %s
+                            """, (participant_code, sender_data["session_code"]))
             
             # Insert message
             cur.execute("""
@@ -657,11 +697,20 @@ class WordGuessingGameEngine:
             message_id = cur.fetchone()["message_id"]
             conn.commit()
             
-            return {
+            result = {
                 "success": True,
                 "message_id": str(message_id),
                 "message": "Message sent successfully"
             }
+            
+            # Add guess verification result if sender is a guesser
+            if sender_data["role"] == "guesser":
+                result["is_correct_guess"] = is_correct_guess
+                if is_correct_guess:
+                    result["word_guessed"] = True
+                    result["message"] = "Correct guess! The word has been guessed!"
+            
+            return result
                 
         except Exception as e:
             logger.error(f"Failed to send wordguessing message: {e}")

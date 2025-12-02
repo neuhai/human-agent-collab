@@ -291,6 +291,9 @@ vue-app/.vite/
 logs/
 server.log
 
+# Uploaded files
+uploads/
+
 # OS generated files
 .DS_Store
 .DS_Store?

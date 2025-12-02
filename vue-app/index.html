@@ -6,6 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+      // Ensure PDF.js is available globally
+      window.addEventListener('load', function() {
+        if (window['pdfjs-dist'] && window['pdfjs-dist']['build'] && window['pdfjs-dist']['build']['pdf']) {
+          window.pdfjsLib = window['pdfjs-dist']['build']['pdf'];
+        }
+      });
+    </script>
     <title>Vite App</title>
   </head>
   <body>

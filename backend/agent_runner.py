@@ -285,7 +285,7 @@ class MemoryAwareLLMPolicy:
                     }, ensure_ascii=False, indent=2))
                 
                 # Add the assistant's response to memory
-                response_content = message.content or ""
+                # Note: response_content is already set correctly above from the API response
                 if response_content:
                     self.add_agent_response(response_content)
                 
@@ -563,6 +563,60 @@ class AgentController:
         print(f"[INIT] Initializing AgentTools...")
         self.tools = AgentTools()
         print(f"[INIT] AgentTools initialized")
+        
+        # Check if this is a passive agent (for Hidden Profiles)
+        self.is_passive = False
+        if self.experiment_type == "hiddenprofiles":
+            try:
+                import psycopg2
+                import psycopg2.extras
+                import json
+                
+                db_url = self.tools._engine.db_connection_string
+                conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+                cur = conn.cursor()
+                
+                if session_code:
+                    cur.execute("""
+                        SELECT experiment_config FROM sessions WHERE session_code = %s
+                    """, (session_code,))
+                else:
+                    cur.execute("""
+                        SELECT s.experiment_config FROM sessions s
+                        JOIN participants p ON s.session_id = p.session_id
+                        WHERE p.participant_code = %s
+                        ORDER BY p.last_activity_timestamp DESC NULLS LAST, p.created_at DESC
+                        LIMIT 1
+                    """, (participant_code,))
+                
+                result = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if result:
+                    experiment_config = result['experiment_config'] or {}
+                    if isinstance(experiment_config, str):
+                        experiment_config = json.loads(experiment_config)
+                    hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+                    participant_initiatives = hidden_profiles_config.get('participantInitiatives', {})
+                    
+                    # Try to get initiative - check both with and without session suffix
+                    initiative = participant_initiatives.get(participant_code)
+                    if not initiative:
+                        # Try without session suffix (e.g., "Bob" instead of "Bob_test1")
+                        base_code = participant_code.rsplit('_', 1)[0] if '_' in participant_code else participant_code
+                        initiative = participant_initiatives.get(base_code)
+                    
+                    # Default to 'active' if not found
+                    if not initiative:
+                        initiative = 'active'
+                    
+                    self.is_passive = (initiative == 'passive')
+                    print(f"[INIT] Agent {participant_code} initiative: {initiative} (is_passive={self.is_passive})")
+                    print(f"[INIT] Available initiatives in config: {participant_initiatives}")
+            except Exception as e:
+                print(f"[INIT WARNING] Could not determine initiative for {participant_code}: {e}")
+                self.is_passive = False
         
         # Initialize policy
         print(f"[INIT] Initializing policy (use_llm={use_llm}, use_memory={use_memory})...")
@@ -851,6 +905,7 @@ class AgentController:
                 "shapefactory": os.path.join(prompts_dir, "shapefactory_agent_prompt.txt"),
                 "daytrader": os.path.join(prompts_dir, "daytrader_agent_prompt.txt"),
                 "essayranking": os.path.join(prompts_dir, "essayranking_agent_prompt.txt"),
+                "hiddenprofiles": os.path.join(prompts_dir, "hiddenprofiles_agent_prompt.txt"),
             }
             candidate = exp_map.get(self.experiment_type, exp_map["shapefactory"])
         
@@ -875,7 +930,11 @@ class AgentController:
 
     def _format_participants(self, public_state: Dict[str, Any]) -> str:
         """Format participants list with awareness dashboard configuration"""
+        # Try other_participants first, then fall back to participants (for hiddenprofiles)
         others = public_state.get("other_participants", []) or []
+        if not others:
+            # Fallback for hiddenprofiles which uses "participants"
+            others = public_state.get("participants", []) or []
         
         if not others:
             return "(none)"
@@ -899,6 +958,10 @@ class AgentController:
         show_production = awareness_config.get("showProductionCount", True)
         show_orders = awareness_config.get("showOrderProgress", True)
         
+        # Do not show money for Hidden Profiles and Word Guessing (they don't have money)
+        if self.experiment_type in ["hiddenprofiles", "wordguessing"]:
+            show_money = False
+        
         lines = []
         for p in others:
             pid = p.get("participant_id") or p.get("id") or p.get("participant_code") or "unknown"
@@ -909,7 +972,7 @@ class AgentController:
             # Always show basic participant ID
             info_parts.append(pid)
             
-            # Add money if enabled
+            # Add money if enabled (and not Hidden Profiles/Word Guessing)
             if show_money:
                 money = p.get("money", 300)
                 info_parts.append(f"money: ${money}")
@@ -1637,12 +1700,24 @@ class AgentController:
                 return None
 
     def _choose_recipient(self, public_state: Dict[str, Any]) -> Optional[str]:
+        # Try other_participants first, then fall back to participants (for hiddenprofiles)
         others = public_state.get("other_participants", []) or []
+        if not others:
+            # Fallback to participants for Hidden Profiles
+            others = public_state.get("participants", []) or []
+        
         candidates = []
         for p in others:
             code = p.get("participant_id") or p.get("participant_code") or p.get("id")
             if code and code != self.participant_code:
-                candidates.append(code)
+                # For Hidden Profiles, extract display name if it's the internal code
+                if self.experiment_type == "hiddenprofiles" and '_' in str(code):
+                    # This might be an internal code with session suffix, try display name
+                    display_name = str(code).rsplit('_', 1)[0]
+                    if display_name != self.participant_code:
+                        candidates.append(display_name)
+                else:
+                    candidates.append(code)
         if not candidates:
             return None
         return random.choice(candidates)
@@ -1657,10 +1732,15 @@ class AgentController:
             atype = a.get("type")
             if atype == "message":
                 # Handle messages based on communication level
-                if communication_level == "no_chat":
+                # For Hidden Profiles, "group_chat" should be treated as broadcast mode
+                effective_communication_level = communication_level
+                if self.experiment_type == "hiddenprofiles" and communication_level == "group_chat":
+                    effective_communication_level = "broadcast"
+                
+                if effective_communication_level == "no_chat":
                     # Skip messages in no_chat mode
                     continue
-                elif communication_level == "broadcast":
+                elif effective_communication_level == "broadcast":
                     # Force all messages to be broadcast in broadcast mode
                     content = a.get("content") or ""
                     if content:
@@ -1788,6 +1868,17 @@ class AgentController:
                         "participant_code": self.participant_code,
                     }
                 })
+            elif atype == "submit_vote":
+                # Hidden Profiles action - submit vote for a candidate
+                candidate_name = a.get("candidate_name", "")
+                if candidate_name:
+                    calls.append({
+                        "name": "submit_vote",
+                        "arguments": {
+                            "participant_code": self.participant_code,
+                            "candidate_name": candidate_name,
+                        }
+                    })
         return calls
 
     def _get_unread_messages_for_agent(self) -> List[Dict[str, Any]]:
@@ -2600,6 +2691,9 @@ Instructions on Aligning with Human Behaviors:
 - Show genuine interest in understanding different perspectives on essay quality.
 - When discussing essays, be specific about what you liked or didn't like. Reference specific parts of the essays when possible.
 """
+        elif self.experiment_type == "hiddenprofiles":
+            # Build status update for Hidden Profiles
+            status_update = self._build_hiddenprofiles_status_update(private_state, public_state, unread_messages_section, time_remaining_min, state)
         else:
             # For other experiment types, provide a basic structure that can be manually customized
             status_update = f"""
@@ -2675,6 +2769,245 @@ CURRENT STATUS UPDATE (WORDGUESSING):
 
 - Other Participants:
 {self._format_participants(public_state)}"""
+        
+        return status_update.strip()
+
+    def _has_voted(self, participant_code: str, session_code: str = None) -> bool:
+        """Check if the participant has already submitted a vote"""
+        try:
+            import psycopg2
+            import psycopg2.extras
+            import json
+            
+            db_url = self.tools._engine.db_connection_string
+            conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+            cur = conn.cursor()
+            
+            # Get session config
+            if session_code:
+                cur.execute("""
+                    SELECT experiment_config FROM sessions WHERE session_code = %s
+                """, (session_code,))
+            else:
+                cur.execute("""
+                    SELECT s.experiment_config FROM sessions s
+                    JOIN participants p ON s.session_id = p.session_id
+                    WHERE p.participant_code = %s
+                    ORDER BY p.last_activity_timestamp DESC NULLS LAST, p.created_at DESC
+                    LIMIT 1
+                """, (participant_code,))
+            
+            result = cur.fetchone()
+            cur.close()
+            conn.close()
+            
+            if result:
+                experiment_config = result['experiment_config'] or {}
+                hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+                votes = hidden_profiles_config.get('votes', {})
+                return participant_code in votes
+            
+            return False
+            
+        except Exception as e:
+            print(f"Warning: Could not check vote status for {participant_code}: {e}")
+            return False
+
+    def _build_hiddenprofiles_status_update(self, private_state: Dict[str, Any], public_state: Dict[str, Any], unread_messages_section: str, time_remaining_min: int, state: Dict[str, Any]) -> str:
+        """Build status update specifically for Hidden Profiles experiments with voting prompts."""
+        # Get experiment status
+        experiment_status = public_state.get("experiment_status", "idle")
+        time_remaining_sec = int(public_state.get("time_remaining", 0) or 0)
+        
+        # Log when this function is called for debugging
+        self._log(f"📋 _build_hiddenprofiles_status_update called with experiment_status='{experiment_status}'")
+        
+        # Check if participant has already voted
+        has_voted = self._has_voted(self.participant_code, self.session_code)
+        current_vote = None
+        if has_voted:
+            try:
+                import psycopg2
+                import psycopg2.extras
+                import json
+                
+                db_url = self.tools._engine.db_connection_string
+                conn = psycopg2.connect(db_url, cursor_factory=psycopg2.extras.RealDictCursor)
+                cur = conn.cursor()
+                
+                if self.session_code:
+                    cur.execute("""
+                        SELECT experiment_config FROM sessions WHERE session_code = %s
+                    """, (self.session_code,))
+                else:
+                    cur.execute("""
+                        SELECT s.experiment_config FROM sessions s
+                        JOIN participants p ON s.session_id = p.session_id
+                        WHERE p.participant_code = %s
+                        ORDER BY p.last_activity_timestamp DESC NULLS LAST, p.created_at DESC
+                        LIMIT 1
+                    """, (self.participant_code,))
+                
+                result = cur.fetchone()
+                cur.close()
+                conn.close()
+                
+                if result:
+                    experiment_config = result['experiment_config'] or {}
+                    hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+                    votes = hidden_profiles_config.get('votes', {})
+                    current_vote = votes.get(self.participant_code)
+            except Exception as e:
+                print(f"Warning: Could not get current vote: {e}")
+        
+        # Get candidate names
+        candidate_names = public_state.get("candidate_names", [])
+        candidate_list_str = "\n".join([f"- {name}" for name in candidate_names]) if candidate_names else "(none)"
+        
+        # Determine phase and voting urgency
+        # For Hidden Profiles: Agents are initialized after reading phase, so always prompt for initial vote if not voted
+        # Also prompt when session ends - agents MUST submit a final vote after experiment completes, even if they already voted
+        discussion_ending = time_remaining_min <= 2 or experiment_status == "completed"
+        should_prompt_initial_vote = not has_voted  # Always prompt if not voted (agents initialized after reading)
+        # For final vote: always prompt when experiment is completed, regardless of whether they've already voted
+        # This ensures agents submit their final vote after the discussion ends
+        should_prompt_final_vote = discussion_ending and experiment_status == "completed"
+        
+        # Log voting prompt decision for debugging
+        self._log(f"📊 Voting prompt decision: has_voted={has_voted}, discussion_ending={discussion_ending}, experiment_status='{experiment_status}', should_prompt_final_vote={should_prompt_final_vote}")
+        
+        # Check if there are unread messages
+        has_unread_messages = unread_messages_section and unread_messages_section != "(none)"
+        
+        # Build voting prompt section
+        voting_prompt_section = ""
+        if should_prompt_final_vote:
+            self._log("✅ Building final vote prompt section")
+            # Session ending or ended - final vote
+            # Check if agent has already voted to customize the message
+            if has_voted:
+                voting_prompt_section = f"""
+! DISCUSSION SESSION HAS ENDED - SUBMIT YOUR FINAL VOTE NOW:
+- The experiment has completed. You MUST submit your FINAL VOTE NOW.
+- This is your final opportunity to vote for the most suitable candidate.
+- You may update your previous vote based on the discussion that occurred.
+- Use the submit_vote action with the candidate_name from the candidate list.
+
+AVAILABLE CANDIDATES:
+{candidate_list_str}
+
+INSTRUCTIONS:
+1. Review the candidate list above
+2. Consider all the information from your documents and the discussion
+3. Choose ONE candidate (you may change from your initial vote if the discussion changed your mind)
+4. Submit your FINAL vote using: {{"type": "submit_vote", "candidate_name": "Candidate Name Here"}}
+5. Your response MUST be: {{"actions": [{{"type": "submit_vote", "candidate_name": "..."}}]}}
+
+THIS IS MANDATORY - YOU MUST SUBMIT YOUR FINAL VOTE.
+"""
+            else:
+                voting_prompt_section = """
+! DISCUSSION SESSION HAS ENDED - SUBMIT YOUR VOTE NOW:
+- The discussion timer has ended. You MUST submit your vote NOW.
+- This is your final opportunity to vote for the most suitable candidate.
+- Use the submit_vote action with the candidate_name from the candidate list.
+
+AVAILABLE CANDIDATES:
+""" + candidate_list_str + """
+
+INSTRUCTIONS:
+1. Review the candidate list above
+2. Choose ONE candidate based on the information you read and the discussion
+3. Submit your vote using: {"type": "submit_vote", "candidate_name": "Candidate Name Here"}
+4. Your response MUST be: {"actions": [{"type": "submit_vote", "candidate_name": "..."}]}
+
+THIS IS MANDATORY - YOU CANNOT PROCEED WITHOUT VOTING.
+"""
+        elif should_prompt_initial_vote:
+            # Initial vote (agents are initialized after reading phase completes)
+            # If there are unread messages, allow responding to them, but still prompt for vote
+            if has_unread_messages:
+                voting_prompt_section = f"""
+! SUBMIT YOUR INITIAL VOTE NOW
+You have finished reading your assigned documents and MUST submit your INITIAL VOTE.
+However, you have received new messages from other participants. You may:
+1. Respond to the messages first, then submit your vote, OR
+2. Submit your vote immediately (recommended if you're ready)
+
+AVAILABLE CANDIDATES:
+{candidate_list_str}
+
+INSTRUCTIONS:
+1. Review the candidate list above
+2. Choose ONE candidate based on the information you read
+3. Submit your vote using: {{"type": "submit_vote", "candidate_name": "Candidate Name Here"}}
+4. You can also send messages to discuss with other participants before or after voting
+"""
+            else:
+                # No unread messages - focus on voting only
+                voting_prompt_section = f"""
+! SUBMIT YOUR INITIAL VOTE NOW:
+- You have finished reading your assigned documents.
+- YOU MUST submit your INITIAL VOTE immediately.
+- DO NOT send messages. ONLY submit your vote.
+- Your response MUST contain ONLY a submit_vote action - nothing else.
+
+AVAILABLE CANDIDATES:
+{candidate_list_str}
+
+INSTRUCTIONS:
+1. Review the candidate list above
+2. Choose ONE candidate based on the information you read
+3. Submit your vote using: {{"type": "submit_vote", "candidate_name": "Candidate Name Here"}}
+4. Your response MUST be: {{"actions": [{{"type": "submit_vote", "candidate_name": "..."}}]}}
+
+THIS IS MANDATORY - YOU CANNOT PROCEED WITHOUT VOTING.
+"""
+            self._log(f"✅ Added urgent voting prompt to status update for {self.participant_code} (has_unread_messages={has_unread_messages})")
+        
+        # Build status update
+        # If agent has voted and has unread messages, encourage responding
+        discussion_guidance = ""
+        if has_voted and has_unread_messages:
+            discussion_guidance = "\n- You have submitted your initial vote. You can now freely engage in discussion with other participants based on the messages you've received."
+        elif has_voted:
+            discussion_guidance = "\n- You have submitted your initial vote. Feel free to engage in discussion with other participants."
+        
+        status_update = f"""
+CURRENT STATUS UPDATE (HIDDEN PROFILES):
+
+- Experiment Status: {experiment_status.upper()}
+- Time Remaining: {time_remaining_min} minutes ({time_remaining_sec} seconds)
+
+- Candidate List:
+{candidate_list_str}
+
+{voting_prompt_section}
+
+- Unread Messages:
+{unread_messages_section}
+{discussion_guidance}
+
+- Recent Failed Actions:
+{self._get_failure_summary()}
+
+- Other Participants:
+{self._format_participants(public_state)}
+
+Instructions on Aligning with Human Behaviors:
+- Engage in meaningful discussion about the candidates based on the information you have.
+- Share insights from your candidate document to help the group make an informed decision.
+- When you have finished reading and formed an opinion, submit your vote.
+- If the discussion is ending or has ended, you MUST submit your vote immediately.
+- Do not spam repetitive messages or vote submissions.
+- Pay attention to the new messages you received, and do not forget to respond to others' messages.
+- When responding, treat the conversation as a *continuous* communication with other participants.
+- Do not share your voting preferences with the group (e.g., your initial choice or who you plan to vote for). Voting is an independent decision.
+- You are not expected to respond to every message. Participate only when you feel your input is necessary.
+- Base your discussion on the information available to you. Avoid repeating points that others have already made.
+- During the discussion, do not express excessive agreement. Instead, you should stand your ground based on the information you received and perceived.
+- If you believe there is nothing further to discuss, you may suggest ending the conversation and stop generating additional responses.
+"""
         
         return status_update.strip()
 
@@ -2761,6 +3094,30 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                 print(f"Warning: Could not get assigned essays for Essay Ranking system prompt: {e}")
                 assigned_essays = "(none)"
         
+        # Get assigned document for Hidden Profiles
+        assigned_doc = "(none)"
+        if self.experiment_type == "hiddenprofiles":
+            try:
+                docs_result = self.tools.get_assigned_documents(self.participant_code, self.session_code)
+                if docs_result.get("candidate_document_text"):
+                    # Use the extracted text content - format it nicely for the prompt
+                    doc_text = docs_result["candidate_document_text"].strip()
+                    if doc_text:
+                        assigned_doc = f"Document Content:\n{doc_text}"
+                    else:
+                        assigned_doc = "(none)"
+                elif docs_result.get("candidate_document"):
+                    # If text not available, provide document metadata with instructions
+                    doc = docs_result["candidate_document"]
+                    doc_id = doc.get('doc_id', 'unknown')
+                    doc_title = doc.get('title', 'Untitled')
+                    assigned_doc = f"Document: {doc_title} (ID: {doc_id})\n\nNote: Document content is not available in the prompt. You can use the get_assigned_documents tool to retrieve the full document content."
+                else:
+                    assigned_doc = "(none)"
+            except Exception as e:
+                print(f"Warning: Could not get assigned document for Hidden Profiles system prompt: {e}")
+                assigned_doc = "(none)"
+        
         # Get configuration parameters
         experiment_config = public_state.get("experiment_config", {})
         price_min = experiment_config.get("minTradePrice", 15)
@@ -2777,6 +3134,23 @@ CURRENT STATUS UPDATE (WORDGUESSING):
         
         # Get participants list
         participants_list = self._format_participants(public_state)
+        
+        # Get candidate list for Hidden Profiles
+        candidate_list = "(none)"
+        if self.experiment_type == "hiddenprofiles":
+            try:
+                candidate_names = public_state.get("candidate_names", [])
+                if candidate_names and isinstance(candidate_names, list) and len(candidate_names) > 0:
+                    # Format candidate names as a numbered list
+                    candidate_lines = []
+                    for idx, name in enumerate(candidate_names, 1):
+                        candidate_lines.append(f"{idx}. {name}")
+                    candidate_list = "\n".join(candidate_lines)
+                else:
+                    candidate_list = "(none)"
+            except Exception as e:
+                print(f"Warning: Could not get candidate list for Hidden Profiles system prompt: {e}")
+                candidate_list = "(none)"
         
         # Build the system prompt
         system_prompt = template.format(
@@ -2802,7 +3176,9 @@ CURRENT STATUS UPDATE (WORDGUESSING):
             shape_amount_per_order=shape_amount_per_order,
             current_orders=current_orders,
             investment_history=investment_history,
-            assigned_essays=assigned_essays
+            assigned_essays=assigned_essays,
+            assigned_doc=assigned_doc,
+            candidate_list=candidate_list
         )
         
         # Modify the prompt based on communication level
@@ -2821,12 +3197,17 @@ CURRENT STATUS UPDATE (WORDGUESSING):
         if not tool_calls:
             return tool_calls
         
+        # For Hidden Profiles, "group_chat" should be treated as broadcast mode
+        effective_communication_level = communication_level
+        if self.experiment_type == "hiddenprofiles" and communication_level == "group_chat":
+            effective_communication_level = "broadcast"
+        
         # Filter out messages if in no_chat mode
-        if communication_level == "no_chat":
+        if effective_communication_level == "no_chat":
             tool_calls = [call for call in tool_calls if call.get("name") != "send_message"]
         
         # Ensure broadcast mode only sends to "all"
-        if communication_level == "broadcast":
+        if effective_communication_level == "broadcast":
             for call in tool_calls:
                 if call.get("name") == "send_message":
                     call["arguments"]["recipient"] = "all"
@@ -2862,18 +3243,71 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                 timer_data = timer_response.json()
                 # Update the public state with the correct timer information
                 if "game_state" in state and "public_state" in state["game_state"]:
+                    old_status = state["game_state"]["public_state"].get("experiment_status", "idle")
+                    new_status = timer_data.get("experiment_status", "idle")
                     state["game_state"]["public_state"]["time_remaining"] = timer_data.get("time_remaining", 0)
-                    state["game_state"]["public_state"]["experiment_status"] = timer_data.get("experiment_status", "idle")
+                    state["game_state"]["public_state"]["experiment_status"] = new_status
                     state["game_state"]["public_state"]["round_duration_minutes"] = timer_data.get("round_duration_minutes", 15)
+                    # Log status change for debugging
+                    if old_status != new_status:
+                        print(f"[{self.participant_code}] ⚡ Status changed: {old_status} -> {new_status}")
+                        self._log(f"⚡ Experiment status changed: {old_status} -> {new_status}")
         except Exception as e:
             print(f"[WARNING] {self.participant_code} Failed to get timer state: {e}")
         
         return state
 
+    def _is_reading_phase_complete(self, state: Dict[str, Any]) -> bool:
+        """Check if reading phase is complete for Hidden Profiles"""
+        if self.experiment_type != "hiddenprofiles":
+            return False
+        
+        game = state.get("game_state", {})
+        private_state = game.get("private_state", {})
+        public_state = game.get("public_state", {})
+        
+        # Try to get public_info from public_state first, then fallback to private_state (Hidden Profiles returns it there)
+        public_info = public_state.get("public_info")
+        if public_info is None:
+            # Fallback: Hidden Profiles also returns public_info in participant state
+            public_info = private_state.get("public_info")
+        
+        # public_info can be None, an empty dict, or an object with content
+        has_public_info = False
+        if public_info is not None:
+            if isinstance(public_info, dict):
+                # Check if it has content or is not empty
+                has_public_info = bool(public_info.get("content")) or bool(public_info.get("doc_id")) or len(public_info) > 0
+            elif isinstance(public_info, str):
+                has_public_info = public_info != ""
+            else:
+                has_public_info = True  # Non-empty object
+        
+        candidate_doc = private_state.get("candidate_document")
+        # candidate_doc can be None or an object
+        has_candidate_doc = False
+        if candidate_doc is not None:
+            if isinstance(candidate_doc, dict):
+                # Check if it has content or is not empty
+                has_candidate_doc = bool(candidate_doc.get("content")) or bool(candidate_doc.get("doc_id")) or len(candidate_doc) > 0
+            else:
+                has_candidate_doc = True  # Non-empty object
+        
+        result = has_public_info and has_candidate_doc
+        if result:
+            self._log(f"✅ Reading phase complete detected: public_info={has_public_info}, candidate_doc={has_candidate_doc}")
+        else:
+            self._log(f"⏳ Reading phase not complete: public_info={has_public_info} (type: {type(public_info)}), candidate_doc={has_candidate_doc} (type: {type(candidate_doc)})")
+        
+        return result
+    
     async def decide(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         
         # Get communication level from state
         communication_level = state.get("communication_level", "chat")
+        
+        # For Hidden Profiles: Agents are initialized after reading phase, so they should always vote
+        # The status update will prompt them to vote if they haven't already
         
         try:
             # Handle memory-aware LLM policy
@@ -2889,6 +3323,9 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                 status_update = self._build_status_update(state)
                 self.policy.add_status_update(status_update)
                 self._log_memory("STATUS_UPDATE", status_update)
+                
+                # Log a preview of the status update to agent log for debugging
+                status_preview = status_update[:200] + "..." if len(status_update) > 200 else status_update
                 
                 # Mark unread messages as read after agent has seen them
                 unread_messages = self._get_unread_messages_for_agent()
@@ -2946,6 +3383,18 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                 
                 # Apply communication level filters
                 tool_calls = self._apply_communication_filters(tool_calls, communication_level, state)
+                
+                # For Hidden Profiles: Log warning if agent hasn't voted (they should vote on initialization)
+                if self.experiment_type == "hiddenprofiles":
+                    has_voted = self._has_voted(self.participant_code, self.session_code)
+                    
+                    if not has_voted:
+                        # Check if tool_calls already includes a submit_vote
+                        has_vote_action = any(call.get("name") == "submit_vote" for call in tool_calls)
+                        
+                        if not has_vote_action:
+                            self._log("⚠️ WARNING: Agent has not voted yet - should have received urgent prompt to vote")
+                            self._log_memory("MISSING_VOTE_ACTION", "Agent did not include submit_vote despite urgent prompt")
                 
                 # Only use fallback if the LLM actually failed, not if it intentionally returned no actions
                 # Check if the original plan had actions but they were filtered out
@@ -3020,6 +3469,17 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                             if call.get("name") == "send_message":
                                 call["arguments"]["recipient"] = "all"
                     
+                    # For Hidden Profiles: Log warning if agent hasn't voted
+                    if self.experiment_type == "hiddenprofiles":
+                        has_voted = self._has_voted(self.participant_code, self.session_code)
+                        
+                        if not has_voted:
+                            # Check if tool_calls already includes a submit_vote
+                            has_vote_action = any(call.get("name") == "submit_vote" for call in tool_calls)
+                            
+                            if not has_vote_action:
+                                self._log("⚠️ WARNING: Agent has not voted yet - should have received urgent prompt to vote")
+                    
                     if not tool_calls:
                         # Return empty list instead of fallback actions
                         tool_calls = []
@@ -3073,6 +3533,17 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                             if call.get("name") == "send_message":
                                 call["arguments"]["recipient"] = "all"
                     
+                    # For Hidden Profiles: Log warning if agent hasn't voted
+                    if self.experiment_type == "hiddenprofiles":
+                        has_voted = self._has_voted(self.participant_code, self.session_code)
+                        
+                        if not has_voted:
+                            # Check if calls already includes a submit_vote
+                            has_vote_action = any(call.get("name") == "submit_vote" for call in calls)
+                            
+                            if not has_vote_action:
+                                self._log("⚠️ WARNING: Agent has not voted yet - should have received urgent prompt to vote")
+                    
                     if not calls:
                         # Return empty list instead of fallback actions
                         calls = []
@@ -3120,6 +3591,40 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                     continue
             
             try:
+                # For Hidden Profiles submit_vote: Check if this is initial or final vote BEFORE submitting
+                vote_type = None
+                if name == 'submit_vote' and self.experiment_type == 'hiddenprofiles':
+                    # Check if agent has voted before
+                    had_voted_before = self._has_voted(self.participant_code, self.session_code)
+                    
+                    # Get experiment status to determine if it's final vote
+                    # Use the timer-state API endpoint to get current experiment status
+                    is_session_ending = False
+                    try:
+                        import requests
+                        backend_host = os.getenv('BACKEND_HOST', 'localhost')
+                        backend_port = os.getenv('BACKEND_PORT', '5002')
+                        url = f"http://{backend_host}:{backend_port}/api/experiment/timer-state"
+                        if self.session_code:
+                            url += f"?session_code={self.session_code}"
+                        timer_response = requests.get(url, timeout=2)
+                        if timer_response.status_code == 200:
+                            timer_data = timer_response.json()
+                            experiment_status = timer_data.get("experiment_status", "idle")
+                            time_remaining = timer_data.get("time_remaining", 0) or 0
+                            is_session_ending = experiment_status == "completed" or int(time_remaining) <= 0
+                    except Exception as e:
+                        # If we can't check, assume it's not ending (safer for initial vote detection)
+                        # Only log if it's not a connection error (which is expected in some test scenarios)
+                        if "Connection" not in str(e) and "timeout" not in str(e).lower():
+                            self._log(f"Warning: Could not check experiment status for vote type: {e}")
+                        pass
+                    
+                    if had_voted_before or is_session_ending:
+                        vote_type = "FINAL VOTE"
+                    else:
+                        vote_type = "INITIAL VOTE"
+                
                 result = self.tools.execute_tool_call(name, args)
                 ok = result.get("success", False)
                 error_message = result.get("message") or result.get("error") or "Unknown error"
@@ -3140,6 +3645,15 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                     success_summary = f"SUCCESSFUL ACTION: {name}"
                     self.policy.add_agent_response(success_summary)
                     self._log_memory("SUCCESSFUL_ACTION", f"{name}: {result.get('message', 'Success')}")
+                
+                # For Hidden Profiles: Log initial and final votes with detailed information
+                if ok and name == 'submit_vote' and self.experiment_type == 'hiddenprofiles' and vote_type:
+                    candidate_name = args.get('candidate_name', 'Unknown')
+                    self._log(f"📊 {vote_type}: {self.participant_code} submitted vote for candidate: {candidate_name}")
+                    self._log_memory(f"{vote_type}", f"Submitted vote for candidate: {candidate_name}")
+                    
+                    # Also log to LLM log for visibility
+                    self._log_llm(f"{vote_type}", f"Agent {self.participant_code} voted for: {candidate_name}")
                 
                 # Emit WebSocket events for successful trade operations
                 if ok and name in ['create_trade_offer', 'respond_to_trade_offer', 'cancel_trade_offer']:
@@ -3255,9 +3769,201 @@ CURRENT STATUS UPDATE (WORDGUESSING):
         if not self._stop_event.is_set():
             self._stop_event.set()
 
+    async def run_single_cycle(self):
+        """Run a single perception-decision-action cycle (for passive agents triggered by messages)"""
+        try:
+            if self.is_passive:
+                self._log(f"PASSIVE agent triggered - running single cycle (message received)")
+            else:
+                self._log(f"Triggered single cycle (message received)")
+            state = await self.perceive()
+            
+            # Check experiment status - skip actions if not running
+            experiment_status = state.get("game_state", {}).get("public_state", {}).get("experiment_status", "idle")
+            if experiment_status == "completed":
+                # For Hidden Profiles: Ensure final vote is submitted before stopping
+                # Agents MUST submit a final vote after experiment completes, even if they already voted
+                if self.experiment_type == "hiddenprofiles":
+                    has_voted = self._has_voted(self.participant_code, self.session_code)
+                    # Always prompt for final vote when experiment is completed
+                    # This allows agents to update their vote based on the discussion
+                    self._log("⚠️ EXPERIMENT COMPLETED - Agent must submit final vote.")
+                    # Ensure state has the correct experiment_status for status update building
+                    if "game_state" in state and "public_state" in state["game_state"]:
+                        state["game_state"]["public_state"]["experiment_status"] = "completed"
+                        self._log(f"✅ Updated state experiment_status to 'completed' for final vote prompt")
+                    # Call decide() which will build the status update with final vote prompt
+                    tool_calls = await self.decide(state)
+                    if tool_calls:
+                        await self.act(tool_calls)
+                        # Check if a vote was submitted
+                        has_vote_action = any(call.get("name") == "submit_vote" for call in tool_calls)
+                        if has_vote_action:
+                            self._log("✅ Final vote submitted")
+                        else:
+                            self._log("⚠️ WARNING: Agent did not submit final vote - may have already voted or chose not to update")
+                    else:
+                        self._log("⚠️ WARNING: Agent did not generate any actions")
+                
+                self._log(f"Experiment status is '{experiment_status}' - session completed. Skipping cycle.")
+                return
+            elif experiment_status != "running":
+                self._log(f"Experiment status is '{experiment_status}', skipping actions. Waiting for 'running' status...")
+                # Even if experiment is not running, we should still add status update for passive agents
+                # so they can see new messages
+                if self.is_passive:
+                    self._log("⚠️ Experiment not running, but adding status update for passive agent to see new messages")
+                    try:
+                        if isinstance(self.policy, MemoryAwareLLMPolicy):
+                            # Initialize memory if not already done
+                            if not self.policy.is_initialized:
+                                self._log("📋 Initializing memory for passive agent (experiment not running)")
+                                system_prompt = self._build_agent_decision_system_prompt(state)
+                                self.policy.initialize_memory(system_prompt)
+                                self._log_memory("INITIALIZATION", f"Memory initialized with system prompt length: {len(system_prompt)}")
+                                self._log("✅ Memory initialized for passive agent")
+                            
+                            # Now add status update
+                            status_update = self._build_status_update(state)
+                            self.policy.add_status_update(status_update)
+                            self._log_memory("STATUS_UPDATE", status_update)
+                            self._log(f"✅ Status update added for passive agent (experiment not running, length: {len(status_update)} chars)")
+                    except Exception as e:
+                        self._log(f"Error adding status update: {e}")
+                        import traceback
+                        self._log(f"Traceback: {traceback.format_exc()}")
+                return
+            
+            # For Hidden Profiles: Agents should vote on initialization (they're initialized after reading phase)
+            # Status update will prompt them to vote
+            
+            self._log("📊 Running decide() - status update will be added here")
+            
+            # Verify status update will be included
+            if isinstance(self.policy, MemoryAwareLLMPolicy):
+                history_length = len(self.policy.conversation_history)
+                self._log(f"📊 Conversation history length before decide(): {history_length}")
+                # Check if last entry is a status update
+                if history_length > 0:
+                    last_entry = self.policy.conversation_history[-1]
+                    if last_entry.get("role") == "user" and "STATUS UPDATE" in last_entry.get("content", ""):
+                        self._log("✅ Status update is in conversation history and will be sent to LLM")
+                    else:
+                        self._log(f"⚠️ Last conversation entry is not a status update: {last_entry.get('role')}")
+            
+            tool_calls = await self.decide(state)
+            # Safer logging of tool_calls
+            try:
+                self._log(f"Tool calls: {json.dumps(tool_calls, ensure_ascii=False)}")
+            except Exception as log_e:
+                self._log(f"Tool calls (unparseable): {str(tool_calls)[:200]}... (log error: {log_e})")
+            await self.act(tool_calls)
+            self._log("✅ Single cycle completed")
+        except Exception as e:
+            self._log(f"Error in single cycle: {e}")
+            import traceback
+            self._log(f"Traceback: {traceback.format_exc()}")
+
     async def run(self):
         """Main agent loop"""
-        self._log(f"Starting agent loop with interval_seconds={self.interval_seconds}")
+        # Passive agents don't run on a timer - they only respond to external triggers
+        if self.is_passive:
+            self._log("Starting PASSIVE agent - will only respond to messages (no timer-based cycles)")
+            self._log("Agent is waiting for external triggers via run_single_cycle()")
+            
+            # For Hidden Profiles: Only prompt passive agents to vote if experiment has started (status is 'running')
+            # Passive agents should NOT vote before the human participant submits their first vote
+            if self.experiment_type == "hiddenprofiles":
+                try:
+                    state = await self.perceive()
+                    experiment_status = state.get("game_state", {}).get("public_state", {}).get("experiment_status", "idle")
+                    has_voted = self._has_voted(self.participant_code, self.session_code)
+                    
+                    # Only prompt for initial vote if experiment is running AND agent hasn't voted yet
+                    if experiment_status == "running" and not has_voted:
+                        tool_calls = await self.decide(state)
+                        if tool_calls:
+                            await self.act(tool_calls)
+                            self._log("Vote cycle completed during passive agent initialization")
+                    elif experiment_status != "running":
+                        self._log(f"ℹ️ PASSIVE AGENT INITIALIZATION: Experiment status is '{experiment_status}' - waiting for experiment to start before voting")
+                    elif has_voted:
+                        self._log("ℹ️ PASSIVE AGENT INITIALIZATION: Agent has already voted - skipping initial vote prompt")
+                except Exception as e:
+                    self._log(f"Error checking vote status on passive agent initialization: {e}")
+            
+            # Wait indefinitely until stopped, checking periodically for experiment completion
+            check_interval = 30  # Check every 30 seconds if experiment is still running
+            while not self._stop_event.is_set():
+                try:
+                    # Periodically check if experiment is completed
+                    state = await self.perceive()
+                    experiment_status = state.get("game_state", {}).get("public_state", {}).get("experiment_status", "idle")
+                    if experiment_status == "completed":
+                        # For Hidden Profiles: Ensure final vote is submitted before stopping
+                        # Agents MUST submit a final vote after experiment completes, even if they already voted
+                        if self.experiment_type == "hiddenprofiles":
+                            has_voted = self._has_voted(self.participant_code, self.session_code)
+                            # Always prompt for final vote when experiment is completed
+                            # This allows agents to update their vote based on the discussion
+                            self._log("⚠️ EXPERIMENT COMPLETED - Agent must submit final vote before stopping.")
+                            # Ensure state has the correct experiment_status for status update building
+                            if "game_state" in state and "public_state" in state["game_state"]:
+                                state["game_state"]["public_state"]["experiment_status"] = "completed"
+                                self._log(f"✅ Updated state experiment_status to 'completed' for final vote prompt")
+                            # Call decide() which will build the status update with final vote prompt
+                            tool_calls = await self.decide(state)
+                            if tool_calls:
+                                await self.act(tool_calls)
+                                # Check if a vote was submitted
+                                has_vote_action = any(call.get("name") == "submit_vote" for call in tool_calls)
+                                if has_vote_action:
+                                    self._log("✅ Final vote submitted before session end")
+                                else:
+                                    self._log("⚠️ WARNING: Agent did not submit final vote - may have already voted or chose not to update")
+                            else:
+                                self._log("⚠️ WARNING: Agent did not generate any actions before session end")
+                        
+                        self._log(f"Experiment status is '{experiment_status}' - session completed. Stopping passive agent.")
+                        break
+                except Exception as e:
+                    self._log(f"Error checking experiment status: {e}")
+                
+                # Wait for check_interval seconds, checking stop event periodically
+                waited = 0
+                while waited < check_interval and not self._stop_event.is_set():
+                    await asyncio.sleep(1)  # Check every second
+                    waited += 1
+                
+                if self._stop_event.is_set():
+                    break
+            
+            self._log("Passive agent loop finished - stopped by external request or experiment completed")
+            return
+        
+        # Active agents run on a timer
+        self._log(f"Starting ACTIVE agent loop with interval_seconds={self.interval_seconds}")
+        
+        # For Hidden Profiles: Only prompt agents to vote if experiment has started (status is 'running')
+        # Agents should NOT vote before the human participant submits their first vote
+        if self.experiment_type == "hiddenprofiles":
+            try:
+                state = await self.perceive()
+                experiment_status = state.get("game_state", {}).get("public_state", {}).get("experiment_status", "idle")
+                has_voted = self._has_voted(self.participant_code, self.session_code)
+                
+                # Only prompt for initial vote if experiment is running AND agent hasn't voted yet
+                if experiment_status == "running" and not has_voted:
+                    tool_calls = await self.decide(state)
+                    if tool_calls:
+                        await self.act(tool_calls)
+                        self._log("Vote cycle completed during initialization")
+                elif experiment_status != "running":
+                    self._log(f"ℹ️ INITIALIZATION: Experiment status is '{experiment_status}' - waiting for experiment to start before voting")
+                elif has_voted:
+                    self._log("ℹ️ INITIALIZATION: Agent has already voted - skipping initial vote prompt")
+            except Exception as e:
+                self._log(f"Error checking vote status on initialization: {e}")
         
         # Add initial delay before first inference
         self._log(f"Waiting {self.interval_seconds} seconds before first inference...")
@@ -3274,7 +3980,34 @@ CURRENT STATUS UPDATE (WORDGUESSING):
                 
                 # Check experiment status - stop if completed, skip actions if not running
                 experiment_status = state.get("game_state", {}).get("public_state", {}).get("experiment_status", "idle")
+                # Log status check for debugging
+                if iteration % 4 == 0:  # Log every 4th cycle to avoid spam
+                    self._log(f"Status check: experiment_status='{experiment_status}' (cycle #{iteration})")
                 if experiment_status == "completed":
+                    # For Hidden Profiles: Ensure final vote is submitted before stopping
+                    # Agents MUST submit a final vote after experiment completes, even if they already voted
+                    if self.experiment_type == "hiddenprofiles":
+                        has_voted = self._has_voted(self.participant_code, self.session_code)
+                        # Always prompt for final vote when experiment is completed
+                        # This allows agents to update their vote based on the discussion
+                        self._log("⚠️ EXPERIMENT COMPLETED - Agent must submit final vote before stopping.")
+                        # Ensure state has the correct experiment_status for status update building
+                        if "game_state" in state and "public_state" in state["game_state"]:
+                            state["game_state"]["public_state"]["experiment_status"] = "completed"
+                            self._log(f"✅ Updated state experiment_status to 'completed' for final vote prompt")
+                        # Call decide() which will build the status update with final vote prompt
+                        tool_calls = await self.decide(state)
+                        if tool_calls:
+                            await self.act(tool_calls)
+                            # Check if a vote was submitted
+                            has_vote_action = any(call.get("name") == "submit_vote" for call in tool_calls)
+                            if has_vote_action:
+                                self._log("✅ Final vote submitted before session end")
+                            else:
+                                self._log("⚠️ WARNING: Agent did not submit final vote - may have already voted or chose not to update")
+                        else:
+                            self._log("⚠️ WARNING: Agent did not generate any actions before session end")
+                    
                     self._log(f"Experiment status is '{experiment_status}' - session completed. Stopping agent loop.")
                     break
                 elif experiment_status != "running":

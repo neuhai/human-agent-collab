@@ -1,49 +1,76 @@
 <template>
   <div class="mturk-panel">
-    <div class="association-section">
-      <h3>Associate mTurk HIT</h3>
-      <div class="form-group">
-        <label for="hit-id">HIT ID</label>
-        <input type="text" id="hit-id" v-model="hitId" placeholder="Enter HIT ID from mTurk" />
-      </div>
-      <div class="form-group">
-        <label>Environment</label>
-        <div class="radio-group">
-          <label><input type="radio" v-model="environment" value="sandbox" /> Sandbox</label>
-          <label><input type="radio" v-model="environment" value="production" /> Production</label>
+    <div class="manage-forms">
+      <div class="form-card">
+        <div class="card-title">Associate mTurk HIT</div>
+        <div class="form-grid">
+          <div class="form-row">
+            <input 
+              class="input" 
+              type="text" 
+              id="hit-id" 
+              v-model="hitId" 
+              placeholder="Enter HIT ID from mTurk" 
+            />
+          </div>
+          <div class="form-row">
+            <select class="select" v-model="environment">
+              <option value="">Select Environment</option>
+              <option value="sandbox">Sandbox</option>
+              <option value="production">Production</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <button class="btn primary" @click="associateHit" :disabled="!hitId || !environment">
+              Associate HIT
+            </button>
+          </div>
         </div>
       </div>
-      <button @click="associateHit" :disabled="!hitId || !environment">Associate HIT</button>
     </div>
 
-    <div class="review-section">
-      <h3>Review Assignments</h3>
-      <button @click="fetchAssignments">Refresh Assignments</button>
-      <div v-if="isLoading">Loading...</div>
-      <div v-else-if="assignments.length === 0">No assignments to review.</div>
-      <table v-else>
-        <thead>
-          <tr>
-            <th>Worker ID</th>
-            <th>Assignment ID</th>
-            <th>Status</th>
-            <th>Platform Data</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="assignment in assignments" :key="assignment.AssignmentId">
-            <td>{{ assignment.WorkerId }}</td>
-            <td>{{ assignment.AssignmentId }}</td>
-            <td>{{ assignment.AssignmentStatus }}</td>
-            <td><!-- Placeholder for platform data --></td>
-            <td>
-              <button @click="approve(assignment.AssignmentId)" :disabled="assignment.AssignmentStatus !== 'Submitted'">Approve</button>
-              <button @click="reject(assignment.AssignmentId)" :disabled="assignment.AssignmentStatus !== 'Submitted'">Reject</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="table-section">
+      <div class="section-title">
+        Review Assignments
+        <button class="btn secondary" @click="fetchAssignments" :disabled="isLoading">
+          {{ isLoading ? 'Loading...' : 'Refresh Assignments' }}
+        </button>
+      </div>
+      <div v-if="isLoading" class="loading-message">Loading assignments...</div>
+      <div v-else-if="assignments.length === 0" class="empty-message">No assignments to review.</div>
+      <div v-else class="manage-table">
+        <div class="table-head">
+          <div class="th">Worker ID</div>
+          <div class="th">Assignment ID</div>
+          <div class="th">Status</div>
+          <div class="th">Platform Data</div>
+          <div class="th actions">Actions</div>
+        </div>
+        <div class="table-body">
+          <div class="tr" v-for="assignment in assignments" :key="assignment.AssignmentId">
+            <div class="td">{{ assignment.WorkerId }}</div>
+            <div class="td">{{ assignment.AssignmentId }}</div>
+            <div class="td">{{ assignment.AssignmentStatus }}</div>
+            <div class="td"><!-- Placeholder for platform data --></div>
+            <div class="td actions">
+              <button 
+                class="btn primary" 
+                @click="approve(assignment.AssignmentId)" 
+                :disabled="assignment.AssignmentStatus !== 'Submitted'"
+              >
+                Approve
+              </button>
+              <button 
+                class="btn danger" 
+                @click="reject(assignment.AssignmentId)" 
+                :disabled="assignment.AssignmentStatus !== 'Submitted'"
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -157,26 +184,195 @@ onMounted(() => {
 .mturk-panel {
   display: flex;
   flex-direction: column;
-  gap: 2rem;
-}
-.form-group {
-  margin-bottom: 1rem;
-}
-.radio-group {
-  display: flex;
   gap: 1rem;
 }
-table {
+
+.manage-forms {
+  margin-bottom: 1rem;
+}
+
+.form-card {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.card-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.form-row {
+  margin-bottom: 6px;
+}
+
+.input, .select {
   width: 100%;
-  border-collapse: collapse;
-  margin-top: 1rem;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 12px;
 }
-th, td {
-  border: 1px solid #ddd;
+
+.select:disabled {
+  background-color: #f9fafb;
+  color: #9ca3af;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.btn {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.btn.primary {
+  background: #2563eb;
+  color: #fff;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.btn.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn.secondary {
+  background-color: #f3f4f6;
+  color: #374151;
+}
+
+.btn.secondary:hover:not(:disabled) {
+  background-color: #e5e7eb;
+}
+
+.btn.danger {
+  background: #dc2626;
+  color: #fff;
+}
+
+.btn.danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.table-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  font-size: 14px;
+  color: #374151;
+}
+
+.loading-message,
+.empty-message {
+  padding: 12px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.manage-table {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  overflow-x: auto;
+}
+
+.table-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 2fr;
+  gap: 8px;
   padding: 8px;
-  text-align: left;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  font-weight: 600;
+  font-size: 12px;
+  color: #374151;
 }
-th {
-  background-color: #f2f2f2;
+
+.table-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f1f5f9;
+}
+
+.table-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.table-body::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+
+.table-body::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.table-body::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.tr {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 2fr;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.tr:hover {
+  background: #f9fafb;
+}
+
+.td {
+  font-size: 12px;
+  color: #374151;
+  display: flex;
+  align-items: center;
+}
+
+.td.actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.th {
+  font-size: 12px;
+  color: #374151;
+}
+
+.th.actions {
+  text-align: left;
 }
 </style>
