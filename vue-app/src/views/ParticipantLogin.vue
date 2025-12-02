@@ -49,25 +49,158 @@
         </ul>
       </div>
 
-      <div class="experiment-info">
+      <!-- <div class="experiment-info">
         <h4>About Shape Factory</h4>
         <p>You'll be participating in an economic simulation where you trade geometric shapes with other participants to complete orders and earn money.</p>
-      </div>
+      </div> -->
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
+const route = useRoute()
 
 // Reactive state
 const participantCode = ref('')
 const sessionCode = ref('')  // Empty by default - require user input
 const isLoading = ref(false)
 const errorMessage = ref('')
+
+// check if the page is loaded by a mTurk worker or Prolific participant
+onMounted(async () => {
+  const workerId = route.query.workerId as string
+  const assignmentId = route.query.assignmentId as string
+  const hitId = route.query.hitId as string
+  
+  const prolificPid = route.query.PROLIFIC_PID as string
+  const studyId = route.query.STUDY_ID as string
+  const prolificSessionId = route.query.SESSION_ID as string
+  
+  // if the page is loaded by a mTurk worker, auto assign and login
+  if (workerId && assignmentId) {
+    await handleMTurkAutoFlow(workerId, assignmentId, hitId)
+  }
+  // if the page is loaded by a Prolific participant, auto assign and login
+  else if (prolificPid && studyId && prolificSessionId) {
+    await handleProlificAutoFlow(prolificPid, studyId, prolificSessionId)
+  }
+})
+
+// mTurk auto assign and login flow
+const handleMTurkAutoFlow = async (workerId: string, assignmentId: string, hitId?: string) => {
+  isLoading.value = true
+  errorMessage.value = ''
+  
+  try {
+    // step 1: assign an existing participant
+    const assignResponse = await fetch('/api/mturk/assign-hiddenprofile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workerId, assignmentId, hitId })
+    })
+    
+    const assignData = await assignResponse.json()
+    
+    if (!assignResponse.ok || !assignData.success) {
+      errorMessage.value = assignData.error || 'Failed to assign session'
+      isLoading.value = false
+      return
+    }
+    
+    // assignment successful, save information
+    participantCode.value = assignData.participant_code
+    sessionCode.value = assignData.session_code
+    
+    // step 2: auto login
+    const loginResponse = await fetch('/api/mturk/auto-login-hiddenprofile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workerId, assignmentId })
+    })
+    
+    const loginData = await loginResponse.json()
+    
+    if (!loginResponse.ok || !loginData.success) {
+      errorMessage.value = loginData.error || 'Failed to login'
+      isLoading.value = false
+      return
+    }
+    
+    // login successful, save authentication information and redirect
+    sessionStorage.setItem('auth_token', loginData.token)
+    sessionStorage.setItem('participant_code', loginData.participant.participant_code)
+    sessionStorage.setItem('participant_id', loginData.participant.participant_id)
+    sessionStorage.setItem('session_code', loginData.session.session_code)
+    
+    // redirect to the participant interface
+    router.push('/participant')
+    
+  } catch (error) {
+    console.error('MTurk auto flow error:', error)
+    errorMessage.value = 'Network error during auto assignment/login'
+    isLoading.value = false
+  }
+}
+
+// Prolific auto assign and login flow
+const handleProlificAutoFlow = async (prolificPid: string, studyId: string, prolificSessionId: string) => {
+  isLoading.value = true
+  errorMessage.value = ''
+  
+  try {
+    // step 1: assign an existing participant
+    const assignResponse = await fetch('/api/prolific/assign-hiddenprofile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prolificPid, studyId, prolificSessionId })
+    })
+    
+    const assignData = await assignResponse.json()
+    
+    if (!assignResponse.ok || !assignData.success) {
+      errorMessage.value = assignData.error || 'Failed to assign session'
+      isLoading.value = false
+      return
+    }
+    
+    // assignment successful, save information
+    participantCode.value = assignData.participant_code
+    sessionCode.value = assignData.session_code
+    
+    // step 2: auto login
+    const loginResponse = await fetch('/api/prolific/auto-login-hiddenprofile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prolificPid, studyId, prolificSessionId })
+    })
+    
+    const loginData = await loginResponse.json()
+    
+    if (!loginResponse.ok || !loginData.success) {
+      errorMessage.value = loginData.error || 'Failed to login'
+      isLoading.value = false
+      return
+    }
+    
+    // login successful, save authentication information and redirect
+    sessionStorage.setItem('auth_token', loginData.token)
+    sessionStorage.setItem('participant_code', loginData.participant.participant_code)
+    sessionStorage.setItem('participant_id', loginData.participant.participant_id)
+    sessionStorage.setItem('session_code', loginData.session.session_code)
+    
+    // redirect to the participant interface
+    router.push('/participant')
+    
+  } catch (error) {
+    console.error('Prolific auto flow error:', error)
+    errorMessage.value = 'Network error during auto assignment/login'
+    isLoading.value = false
+  }
+}
 
 // Handle form submission
 const handleLogin = async () => {

@@ -8,35 +8,136 @@ The system supports multiple experiment paradigms, including ShapeFactory, DayTr
 
 ## Table of Contents
 
-- [System Requirements](#system-requirements)
-- [Running with Docker](#running-with-docker)
+- [Quickest Start for Users](#-quickest-start-for-users)
+- [Developer Guide: Running from Source](#developer-guide-running-from-source)
 - [Customization](#customization)
 - [Development](#development)
 - [Trouble Shooting](#trouble-shooting)
 - [Citation](#citation)
 
-## System Requirements
-- **Python**: 3.10 or higher
-- **Node.js (for frontend management)**: 20.19.0+ or 22.12.0+
-- **PostgreSQL (for database management)**: 13 or higher
-- **npm/yarn**: Node.js package manager
-- **Git**: For version control (recommended)
-- **uv**: Modern Python package manager (recommended)
+## Quickest Start for Users
 
-## Running with Docker
+This method is for users who just want to quickly download and run the application using Docker.  
+It uses a one-line command to automatically set up all necessary configuration files and Docker images.
 
-This is the recommended way to run the platform. It ensures a consistent and stable environment for both production and development.
+> ⚠️ **Important:**  
+> The quick start only prepares and runs the application locally.  
+> To **deploy the application for real experiments (e.g., with MTurk)**, you will need to choose one of the deployment options:
+>
+> - **Cloud deployment** (recommended for long-running / larger studies):  
+>   see [`/user_tutorial/run_on_cloud.md`](./user_tutorial/run_on_cloud.md)
+> - **Local deployment with ngrok** (for development / small-scale tests):  
+>   see [`/user_tutorial/run_locally.md`](./user_tutorial/run_locally.md)
 
-### Prerequisites
-- **Docker & Docker Compose**: [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
+**Prerequisites:**
+- Docker Desktop installed and running.
+- A command-line terminal (like Terminal on macOS/Linux or PowerShell/WSL on Windows).
 
 ---
 
-### **Production Mode (Recommended for Users)**
+### One-Line Setup Command
 
-This mode runs the fully optimized, production-ready version of the application, served via Nginx. It's the easiest way to get the platform running.
+Copy and paste the command for your operating system into a terminal and press Enter.
+
+**For macOS or Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/neuhai/human-agent-collab/main/deployment/quick-start.sh | bash
+````
+
+**For Windows (in PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/neuhai/human-agent-collab/main/deployment/quick-start.ps1 | iex
+```
+
+This command will:
+
+* Download the latest version of the application,
+* Create a folder named `human-agent-collab-app`,
+* Generate configuration files (including `.env`), and
+* Pull the required Docker images.
+
+After this, you can:
+
+* Run the app locally for testing (see “Managing the Application” below), and
+* Follow `/user_tutorial/run_on_cloud.md` or `run_locally.md` to deploy it for real users/MTurk.
+
+---
+
+## Deployment for MTurk Integration
+
+To use this platform for your research, you will need to deploy it to a publicly accessible URL to connect with Amazon Mechanical Turk (MTurk). We provide two recommended deployment options:
+
+*   **Cloud-based Deployment:** For a scalable and robust setup, we recommend deploying the application to a cloud provider like Google Cloud Run or Azure Container Apps using the Docker Offload strategy.
+*   **Local Deployment:** For development and testing, you can run the application on your local machine and expose it to the internet using ngrok.
+
+Detailed tutorials for both deployment options are available in the `user_tutorial/` directory. Please refer to these guides for step-by-step instructions:
+
+*   [Cloud Deployment Tutorial](./user_tutorial/run_on_cloud.md)
+*   [Local Deployment Tutorial](./user_tutorial/run_locally.md)
+
+## Developer Guide: Running from Source
+
+This section is for developers who want to contribute to the project.
+
+### **Option 1: Using VS Code Dev Containers (Recommended)**
+
+This is the best way to ensure a fully consistent development environment. It uses the [VS Code Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) to automatically build and configure your entire development environment inside Docker.
+
+**Prerequisites:**
+- **VS Code** with the **Dev Containers** extension installed.
+- **Docker Desktop** installed and running.
+
+**Getting Started:**
+1.  **Clone the repository**: `git clone https://github.com/neuhai/human-agent-collab.git`
+2.  **Open the folder in VS Code**.
+3.  A pop-up will appear in the bottom-right corner saying: "Folder contains a Dev Container configuration file. Reopen in Container?".
+4.  Click **"Reopen in Container"**.
+
+That's it! VS Code will now automatically build the dev images, start all services (`backend`, `frontend`, `postgres`), install the recommended extensions inside the container, and connect your VS Code window to the `backend` service. Your terminal, debugger, and all tools will be running inside the fully configured container.
+
+---
+### **Option 2: Manual Docker Compose Workflow**
+
+If you are not using VS Code or prefer a manual setup, you can follow the steps below. The only prerequisite is to have **Git** and **Docker Desktop** installed.
+
+#### **Development Mode**
+
+This is the primary way to work on the project. It uses development containers with features like hot-reloading, where your local source code is directly mounted into the containers.
 
 #### 1. Clone the Repository
+```bash
+git clone https://github.com/neuhai/human-agent-collab.git
+cd human-agent-collab
+```
+
+#### 2. Create Environment File
+Copy the development environment template.
+```bash
+cp deployment/.env.dev.template .env
+```
+Edit the `.env` file and set your `POSTGRES_PASSWORD` and `OPENAI_API_KEY`.
+
+#### 3. Build and Run
+Use `docker-compose` to build and start the services in the background. This command will build the `dev` images.
+```bash
+docker-compose -f deployment/docker-compose.dev.yml up --build -d
+```
+
+#### 4. Access the Services
+- **Frontend (with hot-reload)**: **http://localhost:3000**
+- **Backend API**: **http://localhost:5002**
+
+For more detailed commands (viewing logs, accessing container shells, etc.), please refer to the `deployment/README.docker-dev.md` file.
+
+---
+
+#### **Production Mode (from Source)**
+
+This method is for developers who need to build and test the production images locally from the source code.
+
+#### 1. Clone the Repository
+If you haven't already, clone the repository.
 ```bash
 git clone https://github.com/neuhai/human-agent-collab.git
 cd human-agent-collab
@@ -45,242 +146,24 @@ cd human-agent-collab
 #### 2. Create Environment File
 Copy the production environment template. This file will hold your secret credentials.
 ```bash
-cp .env.prod.template .env.prod
+cp deployment/.env.prod.template .env.prod
 ```
-Now, edit the `.env.prod` file with a text editor and set the following values:
-- `POSTGRES_PASSWORD`: A secure password for the database.
-- `OPENAI_API_KEY`: Your OpenAI API key.
-- `JWT_SECRET`: A secure random string. You can generate one with `openssl rand -base64 32`.
+Now, edit the `.env.prod` file and set the required values.
 
 #### 3. Build and Run
-Use the automated deployment script to build and start all services.
+Use the automated deployment script to build and start all services using the `prod` Dockerfiles.
 ```bash
 # On Linux/macOS (you may need to make it executable first)
-chmod +x deploy-prod.sh
-./deploy-prod.sh
+chmod +x deployment/deploy-prod.sh
+./deployment/deploy-prod.sh
 
 # On Windows (using Git Bash or WSL)
-./deploy-prod.sh
+./deployment/deploy-prod.sh
 ```
 
 #### 4. Access the Application
 Once the script finishes, the application will be available at:
 - **URL**: **http://localhost**
-
-To manage the services, you can use the same script with different commands:
-./deploy-prod.sh
-- View logs: `./deploy-prod.sh logs`
-Stop services: `./deploy-prod.sh stop`
-
----
-
-### **Development Mode (for Developers)**
-
-This mode is for developers who want to work on the source code. It uses development servers with features like hot-reloading, and local source code is mounted into the containers.
-
-#### 1. Clone the Repository
-If you haven't already, clone the project.
-
-#### 2. Create Environment File
-Copy the development environment template.
-```bash
-cp .env.dev.template .env
-```
-Edit the `.env` file and set your `POSTGRES_PASSWORD` and `OPENAI_API_KEY`.
-
-#### 3. Build and Run
-Use `docker-compose` to build and start the services in the background.
-```bash
-docker-compose -f docker-compose.dev.yml up --build -d
-```
-
-#### 4. Access the Services
-- **Frontend (with hot-reload)**: **http://localhost:3000**
-- **Backend API**: **http://localhost:5002**
-
-For more detailed commands (viewing logs, accessing container shells, etc.), please refer to the `README.docker-dev.md` file.
-
----
-
-## Manual Setup (Without Docker)
-
-This method is for setting up a local development environment on your machine without using Docker.
-
-### 1. Quick Setup
-
-For the fastest setup experience, use our automated setup script:
-
-#### Step 1: Clone this repository
-
-On your local machine, clone this repository using the following command:
-
-```bash
-git clone https://github.com/neuhai/human-agent-collab.git
-cd human-agent-collab
-```
-
-#### Step 2: Create Environment Configuration
-
-We have consolidated the environment templates for manual setup into a single file.
-
-1.  Open the `.env.manual.template` file in the root directory.
-2.  Copy the `BACKEND CONFIGURATION` section into a new file at `backend/.env`.
-3.  Copy the `FRONTEND CONFIGURATION` section into a new file at `vue-app/.env`.
-4.  Fill in the required values (like database credentials and API keys) in both new `.env` files.
-
-#### Step 3: Run Automated Setup
-```bash
-# Make the script executable (if not already)
-chmod +x setup.sh
-
-# Run the automated setup
-./setup.sh
-```
-
-The script will automatically:
-- Check all prerequisites (Python, Node.js, PostgreSQL)
-- Create virtual environment and install Python dependencies
-- Set up PostgreSQL database using your configuration
-- Initialize database schema
-- Install frontend dependencies
-- Build the frontend for production
-- Generate secure JWT secrets
-
-#### Step 4: Start the Application
-```bash
-# Terminal 1 - Backend Server
-# On Windows:
-source .venv/Scripts/activate  
-# On MacOS: source ../.venv/bin/activate
-cd backend
-python app.py
-
-# Terminal 2 - Frontend Development Server, from the project root
-cd vue-app && npm run dev
-```
-
-**Access Points:**
-
-* **Participant Login**: http://localhost:3000/login
-
-- **Participant Interface**: http://localhost:3000/participant
-- **Researcher Dashboard**: http://localhost:3000/researcher
-- **API Endpoints**: http://localhost:5002/api/*
-
----
-
-### 2. Manual Setup (Alternative)
-
-If you prefer manual setup or need to customize the installation:
-
-#### 2.1 Database Setup
-
-##### Install PostgreSQL
-- **macOS**: `brew install postgresql`
-- **Ubuntu/Debian**: `sudo apt install postgresql postgresql-contrib`
-- **Windows**: Download from [postgresql.org](https://www.postgresql.org/download/)
-
-##### Start PostgreSQL Service
-```bash
-# macOS (with Homebrew)
-brew services start postgresql
-
-# Ubuntu/Debian
-sudo systemctl start postgresql
-
-# Windows: Start PostgreSQL service from Services panel
-```
-
-##### Create Database and User
-```bash
-# Connect to PostgreSQL as superuser
-psql -U postgres
-
-# Create database and user (replace with your desired credentials)
-CREATE DATABASE shape_factory_research;
-CREATE USER your_username WITH PASSWORD 'your_password';
-GRANT ALL PRIVILEGES ON DATABASE shape_factory_research TO your_username;
-\q
-```
-
-##### Initialize Database Schema
-```bash
-# Import the schema (make sure to use the same credentials as above)
-psql -U your_username -d shape_factory_research -f backend/database/schema.sql
-```
-
-**Important**: Remember the database credentials you create here - you'll need them for your `.env` file in the next step.
-
-#### 2.2 Backend Setup
-
-##### Using uv (Recommended)
-```bash
-# Install uv if not already installed
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies
-uv sync
-
-# Activate virtual environment
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-##### Using pip
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install core dependencies
-pip install -r backend/requirements.txt
-
-# Optional: Install analysis dependencies (for data analysis scripts)
-pip install -r backend/requirements-analysis.txt
-```
-
-##### Environment Configuration
-
-We have consolidated the environment templates for manual setup into a single file: `.env.manual.template`.
-
-1.  Open `.env.manual.template`.
-2.  Copy the `BACKEND CONFIGURATION` section into a new file at `backend/.env` and fill in your values.
-3.  Copy the `FRONTEND CONFIGURATION` section into a new file at `vue-app/.env`.
-
-**Note**: Replace the placeholder values with your actual database credentials and OpenAI API key. Without the `.env` files, the application will not start properly.
-
-#### 2.3 Frontend Setup
-
-After creating your `vue-app/.env` file, run the following commands:
-
-```bash
-# Navigate to Vue app directory
-cd vue-app
-
-# Install dependencies
-npm install
-# or
-yarn install
-```
-
-### Development Mode
-
-#### 1. Start Backend Server
-```bash
-# From project root
-cd backend
-python app.py
-```
-The backend will start on `http://localhost:5002`
-
-#### 2. Start Frontend Development Server
-```bash
-# From vue-app directory
-cd vue-app
-npm run dev
-# or
-yarn dev
-```
-The frontend will start on `http://localhost:3000`
 
 
 
@@ -554,67 +437,7 @@ def run_migration():
 
 ### Trouble Shooting
 
-#### Common Problems and Solutions
-
-**1. ".env file not found" Error**
-- The automated script `setup.sh` expects `backend/.env` and `vue-app/.env` to exist.
-- Please follow the instructions in the "Manual Setup" section to create these files from the `.env.manual.template` before running the script.
-
-**2. "Missing required fields" Error**
-- Ensure all required fields are set in your `.env` file:
-  - `DATABASE_USER`
-  - `DATABASE_PASSWORD` 
-  - `DATABASE_NAME`
-  - `OPENAI_API_KEY`
-- Make sure `OPENAI_API_KEY` is not the placeholder value
-
-**3. PostgreSQL Connection Issues**
-```bash
-# Check if PostgreSQL is running
-brew services list | grep postgresql  # macOS
-sudo systemctl status postgresql     # Linux
-
-# Start PostgreSQL if needed
-brew services start postgresql       # macOS
-sudo systemctl start postgresql      # Linux
-```
-
-**4. Permission Denied on setup.sh**
-```bash
-# Make the script executable
-chmod +x setup.sh
-```
-
-**5. Python/Node.js Version Issues**
-- Ensure you have Python 3.12+ and Node.js 20.19.0+
-- Use `python3 --version` and `node --version` to check
-
-**6. Database Already Exists**
-- The script will ask if you want to recreate the database
-- Choose 'y' to recreate or 'N' to use existing database
-
-### Manual Recovery Steps
-
-If the automated setup fails, you can complete the setup manually:
-
-```bash
-# 1. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# 2. Install Python dependencies
-pip install -r backend/requirements.txt
-
-# 3. Set up database manually
-psql -U postgres -c "CREATE DATABASE your_database_name;"
-psql -U your_username -d your_database_name -f backend/database/schema.sql
-
-# 4. Install frontend dependencies
-cd vue-app && npm install && cd ..
-
-# 5. Build frontend
-cd vue-app && npm run build && cd ..
-```
+If you encounter issues, please refer to the `README.docker-dev.md` for detailed troubleshooting steps related to the Docker environment. Common issues often involve port conflicts or incorrect environment variable settings.
 
 ## Citation
 ```

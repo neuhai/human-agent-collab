@@ -20,7 +20,12 @@ def extract_text_from_pdf(pdf_file) -> Optional[str]:
         Extracted text content or None if extraction fails
     """
     try:
-        import PyPDF2
+        try:
+            import PyPDF2
+        except ImportError:
+            logger.error("PyPDF2 is not installed. Please install it with: pip install PyPDF2")
+            logger.error("Alternatively, install all requirements with: pip install -r requirements.txt")
+            return None
         
         # Handle different input types
         if hasattr(pdf_file, 'read'):

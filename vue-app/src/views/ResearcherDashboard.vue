@@ -30,8 +30,8 @@
         >
           <span class="button-text">Reset</span>
         </button>
-        <button class="control-rect end" @click="resetExperiment"
-          :disabled="!isSessionRegistered || !canStartExperiment"
+        <button class="control-rect end" @click="deleteSession"
+          :disabled="!isSessionRegistered"
           title="End experiment and delete session (requires active session)">END</button>
       </div>
     </div>
@@ -633,6 +633,147 @@
                 </div>
               </div>
 
+              <!-- Hidden Profiles Parameters -->
+              <div v-if="selectedExperimentType === 'hiddenprofiles'" class="config-cluster">
+                <div class="cluster-title collapsible" @click="toggleParameterCluster('hiddenProfiles')">
+                  <span class="collapse-icon" :class="{ expanded: parameterClustersExpanded.hiddenProfiles }">▼</span>
+                  <span>Hidden Profiles Settings</span>
+                </div>
+                <div class="config-grid" v-show="parameterClustersExpanded.hiddenProfiles">
+
+                  <!-- Reading Time Configuration -->
+                  <div class="config-group">
+                    <label>Reading Time (minutes)
+                      <span class="tooltip-icon" @mouseenter="activeTooltip = 'readingTime'" @mousemove="updateTooltipPosition($event)" @mouseleave="activeTooltip = null">ⓘ</span>
+                    </label>
+                    <div v-if="activeTooltip === 'readingTime'" class="custom-tooltip" :style="{ left: paramTooltipPosition.x + 'px', top: paramTooltipPosition.y + 'px' }">
+                      Duration for the reading phase before voting. Default is 5 minutes.
+                    </div>
+                    <input
+                      v-model.number="hiddenProfilesReadingTime"
+                      type="number"
+                      min="1"
+                      max="60"
+                      class="config-input"
+                      placeholder="5"
+                      :disabled="!isSessionRegistered"
+                      @change="updateHiddenProfilesReadingTime"
+                    />
+                  </div>
+
+                  <!-- Candidate Names Configuration -->
+                  <div class="config-group full-width">
+                    <label>Candidate Names
+                      <span class="tooltip-icon" @mouseenter="activeTooltip = 'candidateNames'" @mousemove="updateTooltipPosition($event)" @mouseleave="activeTooltip = null">ⓘ</span>
+                    </label>
+                    <div v-if="activeTooltip === 'candidateNames'" class="custom-tooltip" :style="{ left: paramTooltipPosition.x + 'px', top: paramTooltipPosition.y + 'px' }">
+                      Add one candidate at a time. All saved candidates will appear in participants' voting dropdown.
+                    </div>
+                    <div class="candidate-name-input-row">
+                      <input
+                        v-model="hiddenProfilesCandidateNameInput"
+                        type="text"
+                        class="config-input"
+                        placeholder="Enter a candidate name (e.g., Alice)"
+                        :disabled="!isSessionRegistered"
+                      />
+                      <button
+                        type="button"
+                        class="upload-btn"
+                        @click="saveHiddenProfilesCandidateNames"
+                        :disabled="!isSessionRegistered || !hiddenProfilesCandidateNameInput.trim()"
+                      >
+                        Add Candidate
+                      </button>
+                    </div>
+
+
+                    <!-- Saved candidate names table -->
+                    <div v-if="hiddenProfilesCandidateNames.length > 0" class="candidate-names-table">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th style="width: 3rem;">#</th>
+                            <th>Name</th>
+                            <th style="width: 4rem;"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="(name, index) in hiddenProfilesCandidateNames" :key="index">
+                            <td>{{ index + 1 }}</td>
+                            <td>{{ name }}</td>
+                            <td>
+                              <button
+                                type="button"
+                                class="remove-essay-btn"
+                                title="Remove candidate"
+                                @click="removeHiddenProfilesCandidateName(index)"
+                              >
+                                <i class="fa-solid fa-times"></i>
+                              </button>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+
+                  <!-- Candidate Documents Upload Section -->
+                  <div class="config-group essay-upload-section full-width">
+                    <label>Participant Viewable Documents <span class="tooltip-icon" @mouseenter="activeTooltip = 'candidateDocuments'" @mousemove="updateTooltipPosition($event)" @mouseleave="activeTooltip = null">ⓘ</span>
+                    </label>
+                    <div v-if="activeTooltip === 'candidateDocuments'" class="custom-tooltip" :style="{ left: paramTooltipPosition.x + 'px', top: paramTooltipPosition.y + 'px' }">
+                      Upload documents that will be unique to each participant.
+                    </div>
+                    <div class="essay-upload-container">
+                      <input 
+                        type="file" 
+                        ref="candidateDocsFileInput"
+                        @change="handleCandidateDocsFileUpload"
+                        accept=".pdf,.txt,.doc,.docx"
+                        multiple
+                        style="display: none;"
+                      />
+                      <button 
+                        type="button" 
+                        class="upload-btn"
+                        @click="() => ($refs.candidateDocsFileInput as HTMLInputElement)?.click()"
+                        :disabled="!isSessionRegistered"
+                      >
+                        <i class="fa-solid fa-upload"></i> Upload Candidate Documents
+                      </button>
+                    </div>
+                    
+                    <!-- Uploaded Candidate Documents List -->
+                    <div v-if="uploadedCandidateDocs.length > 0" class="uploaded-essays-list">
+                      <h4>Uploaded Candidate Documents:</h4>
+                      <div 
+                        v-for="(doc, index) in uploadedCandidateDocs" 
+                        :key="doc.id"
+                        class="essay-item"
+                      >
+                        <div class="essay-info">
+                          <i class="fa-solid fa-file-pdf"></i>
+                          <span class="essay-title">{{ doc.title }}</span>
+                          <span class="essay-filename">({{ doc.filename }})</span>
+                        </div>
+                        <button 
+                          type="button" 
+                          class="remove-essay-btn"
+                          @click="removeCandidateDoc(index)"
+                          title="Remove candidate document"
+                        >
+                          <i class="fa-solid fa-times"></i>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
@@ -1133,6 +1274,12 @@
                         <div 
                           v-if="selectedExperimentType === 'wordguessing'"
                           class="th role">Role</div>
+                        <div 
+                          v-if="selectedExperimentType === 'hiddenprofiles'"
+                          class="th initiative">Initiative</div>
+                        <div 
+                          v-if="selectedExperimentType === 'hiddenprofiles'"
+                          class="th candidate-doc">Doc</div>
                         <div class="th group">Group</div>
                         <div class="th actions">Actions</div>
                       </div>
@@ -1155,6 +1302,40 @@
                             class="td role">
                             <span v-if="p.role" class="role-badge" :class="p.role">{{ p.role }}</span>
                             <span v-else class="no-role">-</span>
+                          </div>
+                          <div 
+                            v-if="selectedExperimentType === 'hiddenprofiles'"
+                            class="td initiative">
+                            <span v-if="p.type === 'ai' || p.type === 'ai_agent'">
+                              <select 
+                                class="select-small" 
+                                v-model="p.initiative"
+                                @change="updateParticipantInitiative(p.participant_code || p.internal_id || p.id, p.initiative)"
+                              >
+                                <option value="">Select</option>
+                                <option value="active">Active</option>
+                                <option value="passive">Passive</option>
+                              </select>
+                            </span>
+                            <span v-else class="no-initiative">-</span>
+                          </div>
+                          <div 
+                            v-if="selectedExperimentType === 'hiddenprofiles'"
+                            class="td candidate-doc">
+                            <select 
+                              class="select-small" 
+                              v-model="p.candidateDocumentId"
+                              @change="updateParticipantCandidateDocument(p.participant_code || p.internal_id || p.id, p.candidateDocumentId)"
+                            >
+                              <option value="">Select Document</option>
+                              <option 
+                                v-for="doc in uploadedCandidateDocs" 
+                                :key="doc.id" 
+                                :value="doc.id"
+                              >
+                                {{ doc.title }}
+                              </option>
+                            </select>
                           </div>
                           <div class="td group">
                             <span v-if="getParticipantGroup(p.id)" class="group-badge">{{ getParticipantGroup(p.id) }}</span>
@@ -1182,393 +1363,405 @@
                       </div>
                     </div>
                   </div>
-                </div>
-          </div>
-        </div>
-        <!-- Column 2: Monitor Participants / Analysis Behavioral Logs -->
-        <div class="tab-col" v-if="activeTab === 'monitor' || activeTab === 'analysis'">
-          <div class="col-body">
-            <div class="block-title">
-              <template v-if="activeTab === 'monitor'">
-                Participants
-                <div class="indicators">
-                  <span class="online-indicator">{{ onlineCount }} online</span>
-                  <span class="online-indicator">{{ participants.length }} total</span>
-              </div>
-            </template>
-              <template v-else-if="activeTab === 'analysis'">Behavioral Logs</template>
-            </div>
-            <!-- Monitor: Participants Status -->
-            <template v-if="activeTab === 'monitor'">
-              <ParticipantsList
-                :participants="participants"
-                :online-count="onlineCount"
-                :total-orders="participants.reduce((sum, p) => sum + p.orders_completed, 0)"
-              />
-            </template>
-            <!-- Analysis: Behavioral Logs -->
-            <template v-else-if="activeTab === 'analysis'">
-              <div class="behavioral-logs">
-                <!-- Left Column: Controls and Statistics -->
-                <div class="left-column">
-                  <!-- Controls Section -->
-                  <div class="controls-section">
-                    <!-- Participants Dropdown -->
-                    <div class="control-group">
-                      <label>Participants</label>
-                      <div class="custom-select-wrapper">
-                        <div class="custom-select-trigger" @click="toggleParticipantsDropdown">
-                          <div class="selected-content">
-                            <span class="selected-option">{{ getParticipantsDropdownLabel() }}</span>
-                          </div>
-                          <span class="dropdown-arrow">▼</span>
-                        </div>
-                        <div class="custom-dropdown-menu" v-if="showParticipantsDropdown">
-                          <div class="dropdown-item" @click="selectAllParticipants">
-                            <div class="option-content">
-                              <span class="option-tag">All Participants</span>
-                            </div>
-                          </div>
-                          <div 
-                            class="dropdown-item" 
-                            v-for="participant in sessionStatisticsData?.participants || []" 
-                            :key="participant.participant_code"
-                            @click="toggleParticipantSelection(participant.participant_code)"
-                          >
-                            <div class="option-content">
-                              <input 
-                                type="checkbox" 
-                                :checked="isParticipantSelected(participant.participant_code)"
-                                @click.stop
-                                @change="toggleParticipantSelection(participant.participant_code)"
-                                class="participant-checkbox"
-                              />
-                              <span class="participant-name">{{ getDisplayName(participant.participant_code) }}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
 
-                    <!-- Checkboxes -->
-                    <div class="control-group">
-                      <label>Data Types</label>
-                      <div class="checkbox-group">
-                        <label class="checkbox-label">
-                          <input 
-                            type="checkbox" 
-                            v-model="behavioralLogsForm.showTrades"
-                            class="checkbox-input"
-                          />
-                          <span class="checkbox-text">Trades</span>
-                        </label>
-                        <label class="checkbox-label">
-                          <input 
-                            type="checkbox" 
-                            v-model="behavioralLogsForm.showMessages"
-                            class="checkbox-input"
-                          />
-                          <span class="checkbox-text">Messages</span>
-                        </label>
-                      </div>
+                  <!-- Tab 6: MTurk Integration -->
+                  <div v-if="setupTabs.mturkIntegration" class="setup-tab-panel" :class="{ active: activeSetupTab === 'mturkIntegration' }" data-tab-id="mturkIntegration">
+                <div class="workflow-step">
+                  <div class="step-content">
+                    <div class="step-title-row">
+                      <div class="step-title">MTurk Integration</div>
                     </div>
-                  </div>
-
-                  <!-- Statistics Section -->
-                  <div class="statistics-section">
-                    <div class="section-title">
-                      Session Statistics
-                      <button 
-                        class="refresh-btn" 
-                        @click="loadSessionStatistics"
-                        :disabled="isLoadingSessionStatistics"
-                        title="Refresh statistics"
-                      >
-                        <span v-if="isLoadingSessionStatistics">⟳</span>
-                        <span v-else>⟳</span>
-                      </button>
-                    </div>
-                    <div v-if="isLoadingSessionStatistics" class="loading-message">
-                      Loading session statistics...
-                    </div>
-                    <div v-else-if="!sessionStatisticsData" class="no-data-message">
-                      No session statistics available. Please ensure a session is loaded.
-                    </div>
-                    <div v-else class="stats-container">
-                      <!-- General Statistics -->
-                      <div class="stats-category">
-                        <div class="category-header">General</div>
-                        <div class="stats-list">
-                          <div class="stat-item">
-                            <span class="stat-label">Average Money Balance</span>
-                            <span class="stat-value">${{ sessionStatistics.averageMoney }}</span>
-                          </div>
-                          <div v-if="filteredParticipants.length > 1" class="stat-item">
-                            <span class="stat-label">Highest Wealth</span>
-                            <span class="stat-value">${{ sessionStatistics.highestWealth }} ({{ sessionStatistics.highestWealthParticipant }})</span>
-                          </div>
-                          <div v-if="filteredParticipants.length > 1" class="stat-item">
-                            <span class="stat-label">Lowest Wealth</span>
-                            <span class="stat-value">${{ sessionStatistics.lowestWealth }} ({{ sessionStatistics.lowestWealthParticipant }})</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <!-- Trade Statistics -->
-                      <div v-if="behavioralLogsForm.showTrades" class="stats-category">
-                        <div class="category-header">Trade</div>
-                        <div class="stats-list">
-                          <div class="stat-item">
-                            <span class="stat-label">Total Successful Trades</span>
-                            <span class="stat-value">{{ sessionStatistics.totalTrades }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Avg Successful Trades</span>
-                            <span class="stat-value">{{ sessionStatistics.averageTrades }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Average Trade Price</span>
-                            <span class="stat-value">${{ sessionStatistics.averageTradePrice }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Price Range</span>
-                            <span class="stat-value">${{ sessionStatistics.minTradePrice }} - ${{ sessionStatistics.maxTradePrice }}</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <!-- Message Statistics -->
-                      <div v-if="behavioralLogsForm.showMessages" class="stats-category">
-                        <div class="category-header">Message</div>
-                        <div class="stats-list">
-                          <div class="stat-item">
-                            <span class="stat-label">Total Messages</span>
-                            <span class="stat-value">{{ sessionStatistics.totalMessages }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Avg Messages per User</span>
-                            <span class="stat-value">{{ sessionStatistics.averageMessages }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Avg Message Length (All)</span>
-                            <span class="stat-value">{{ sessionStatistics.averageMessageLength }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Avg Message Length (Human)</span>
-                            <span class="stat-value">{{ sessionStatistics.averageMessageLengthPerHuman }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Messages per Trade</span>
-                            <span class="stat-value">{{ sessionStatistics.averageMessagesPerTrade }}</span>
-                          </div>
-                          <div class="stat-item">
-                            <span class="stat-label">Avg Response Latency</span>
-                            <span class="stat-value">{{ sessionStatistics.averageMessageResponseLatency }}s</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Right Column: Charts -->
-                <div class="right-column">
-                  <div class="charts-section">
-                    <div class="section-title">Charts</div>
-                    <div class="charts-grid">
-                      <!-- Chart 1: Trade Timeline (when trades are selected) -->
-                      <div v-if="behavioralLogsForm.showTrades" class="chart-container">
-                        <div class="chart-title">
-                          <span class="chart-title-text">Trade Timeline</span>
-                          <div class="chart-legend">
-                            <span class="legend-item">
-                              <span class="legend-color completed"></span>
-                              Completed Trades
-                            </span>
-                            <span class="legend-item">
-                              <span class="legend-color pending"></span>
-                              Pending Offers
-                            </span>
-                          </div>
-                        </div>
-                        <div class="chart-placeholder">
-                          <div v-if="timelineDataByParticipant.length === 0" class="chart-no-data">
-                            <div class="no-data-message">
-                              <div class="no-data-icon">Chart</div>
-                              <div class="no-data-text">No trade data available for selected participants</div>
-                            </div>
-                          </div>
-                                                                                                                                      <div v-else class="timeline-container">
-                             <!-- Y-axis label -->
-                             <div class="y-axis-label">Participants</div>
-                             
-                             <!-- Timeline rows -->
-                             <div class="timeline-rows">
-                               <div 
-                                 v-for="[participant, trades] in timelineDataByParticipant" 
-                                  :key="participant"
-                                  class="timeline-row"
-                                 >
-                                   <div class="participant-label">{{ participant }}</div>
-                                   <div class="timeline-bars">
-                                     <div 
-                                       v-for="(trade, index) in trades" 
-                                       :key="`${participant}-${index}`"
-                                       class="timeline-bar"
-                                       :style="{ 
-                                         left: getTimelinePosition(trade.firstTradeTime) + '%',
-                                         width: trade.isCompleted ? getTimelineWidth(trade.firstTradeTime, trade.lastTradeTime) + '%' : '2px'
-                                       }"
-                                       :class="{ 
-                                         completed: trade.isCompleted,
-                                         pending: !trade.isCompleted
-                                       }"
-                                       @mouseenter="showTimelineTooltip($event, trade, participant, index)"
-                                       @mouseleave="hideTooltip"
-                                     >
-                                     </div>
-                                   </div>
-                                 </div>
-                               </div>
-                               
-                               <!-- X-axis with time labels and label below -->
-                               <div class="timeline-x-axis">
-                                 <div class="x-axis-labels">
-                                   <span class="x-label start">0:00</span>
-                                   <span class="x-label middle">{{ getMiddleTimeLabel() }}</span>
-                                   <span class="x-label end">{{ getEndTimeLabel() }}</span>
-                                 </div>
-                                 <div class="x-axis-label">Time</div>
-                               </div>
-                             </div>
-                        </div>
-                      </div>
-
-                      <!-- Chart 2: Trade Numbers (when trades are selected) -->
-                      <div v-if="behavioralLogsForm.showTrades" class="chart-container">
-                        <div class="chart-title">
-                          Trade Numbers by Participant
-                        </div>
-                        <div class="chart-placeholder">
-                          <div v-if="chartData.participantChartData.length === 0" class="chart-no-data">
-                            <div class="no-data-message">
-                              <div class="no-data-icon">Chart</div>
-                              <div class="no-data-text">No trade data available for selected participants</div>
-                            </div>
-                          </div>
-                          <div v-else class="google-chart-container">
-                            <div id="trades-bar-chart" class="google-chart"></div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <!-- Chart 3: Number of Sent Messages (when messages are selected) -->
-                      <div v-if="behavioralLogsForm.showMessages" class="chart-container">
-                        <div class="chart-title">
-                          Number of Sent Messages by Participant
-                        </div>
-                        <div class="chart-placeholder">
-                          <div v-if="chartData.participantChartData.length === 0" class="chart-no-data">
-                            <div class="no-data-message">
-                              <div class="no-data-icon">Chart</div>
-                              <div class="no-data-text">No message data available for selected participants</div>
-                            </div>
-                          </div>
-                          <div v-else class="google-chart-container">
-                            <div id="messages-bar-chart" class="google-chart"></div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <!-- No data selected message -->
-                      <div v-if="!behavioralLogsForm.showTrades && !behavioralLogsForm.showMessages" class="no-data-selected">
-                        <div class="no-data-message">
-                          <div class="no-data-icon">Chart</div>
-                          <div class="no-data-text">Please select at least one data type to view charts</div>
-                        </div>
-                      </div>
-                    </div>
+                    <MTurkPanel :session-code="currentSessionCode" />
                   </div>
                 </div>
               </div>
-            </template>
-            
-
+                </div>
+                </div>
           </div>
-        </div>
-
-        <!-- Column 3: Trades (for Monitor tab) / Export Data (for Analysis tab) -->
-        <div class="tab-col" v-if="activeTab === 'monitor' || activeTab === 'analysis'">
-          <div class="col-body">
-            <div class="block-title">
-              <template v-if="activeTab === 'monitor'">
-                Trades
-                <div class="indicators">
-                  <span class="online-indicator">{{ totalTrades }} completed</span>
-                  <span class="online-indicator pending">{{ pendingTrades }} pending</span>
+          <!-- Column 2: Monitor Participants / Analysis Behavioral Logs -->
+          <div class="tab-col" v-if="activeTab === 'monitor' || activeTab === 'analysis'">
+            <div class="col-body">
+              <div class="block-title">
+                <template v-if="activeTab === 'monitor'">
+                  Participants
+                  <div class="indicators">
+                    <span class="online-indicator">{{ onlineCount }} online</span>
+                    <span class="online-indicator">{{ participants.length }} total</span>
                 </div>
               </template>
-              <template v-else-if="activeTab === 'analysis'">Export Data</template>
-            </div>
-            <!-- Monitor: Trades -->
-            <template v-if="activeTab === 'monitor'">
-              <TradesFeed
-                :pending-offers="pendingOffers"
-                :completed-trades="completedTrades"
-                :total-trades="totalTrades"
-                :pending-trades="pendingTrades"
-              />
-            </template>
-            <!-- Analysis: Export Data -->
-            <template v-else-if="activeTab === 'analysis'">
-              <div class="export-form">
-                <div class="form-group">
-                  <label for="data-type">Data to Export</label>
-                  <select 
-                    class="select" 
-                    v-model="exportForm.dataType"
-                    id="data-type"
-                  >
-                    <option value="all">All Data (Complete session export)</option>
-                    <option value="participants">Participants Data</option>
-                    <option value="trades">Trades Data</option>
-                    <option value="messages">Messages Data</option>
-                    <option value="logs">System Logs</option>
-                  </select>
-                </div>
-                
-                <div class="form-group">
-                  <label for="file-format">File Format</label>
-                  <select 
-                    class="select" 
-                    v-model="exportForm.fileFormat"
-                    id="file-format"
-                  >
-                    <option value="json">JSON</option>
-                    <option value="csv">CSV</option>
-                    <option value="excel">Excel (.xlsx)</option>
-                  </select>
-                </div>
-                
-                <div class="form-actions">
-                  <button 
-                    class="btn primary" 
-                    @click="exportData"
-                    :disabled="!isSessionRegistered"
-                  >
-                    Export Data
-                  </button>
-                </div>
-                
-                <div v-if="!isSessionRegistered" class="form-helper">
-                  ⚠️ Create or load a session first to enable data export
-                </div>
+                <template v-else-if="activeTab === 'analysis'">Behavioral Logs</template>
               </div>
-            </template>
-            <!-- Default: Placeholder -->
-            <template v-else>
-              <div class="placeholder">Content will appear here.</div>
-            </template>
+              <!-- Monitor: Participants Status -->
+              <template v-if="activeTab === 'monitor'">
+                <ParticipantsList
+                  :participants="participants"
+                  :online-count="onlineCount"
+                  :total-orders="participants.reduce((sum, p) => sum + p.orders_completed, 0)"
+                />
+              </template>
+              <!-- Analysis: Behavioral Logs -->
+              <template v-else-if="activeTab === 'analysis'">
+                <div class="behavioral-logs">
+                  <!-- Left Column: Controls and Statistics -->
+                  <div class="left-column">
+                    <!-- Controls Section -->
+                    <div class="controls-section">
+                      <!-- Participants Dropdown -->
+                      <div class="control-group">
+                        <label>Participants</label>
+                        <div class="custom-select-wrapper">
+                          <div class="custom-select-trigger" @click="toggleParticipantsDropdown">
+                            <div class="selected-content">
+                              <span class="selected-option">{{ getParticipantsDropdownLabel() }}</span>
+                            </div>
+                            <span class="dropdown-arrow">▼</span>
+                          </div>
+                          <div class="custom-dropdown-menu" v-if="showParticipantsDropdown">
+                            <div class="dropdown-item" @click="selectAllParticipants">
+                              <div class="option-content">
+                                <span class="option-tag">All Participants</span>
+                              </div>
+                            </div>
+                            <div 
+                              class="dropdown-item" 
+                              v-for="participant in sessionStatisticsData?.participants || []" 
+                              :key="participant.participant_code"
+                              @click="toggleParticipantSelection(participant.participant_code)"
+                            >
+                              <div class="option-content">
+                                <input 
+                                  type="checkbox" 
+                                  :checked="isParticipantSelected(participant.participant_code)"
+                                  @click.stop
+                                  @change="toggleParticipantSelection(participant.participant_code)"
+                                  class="participant-checkbox"
+                                />
+                                <span class="participant-name">{{ getDisplayName(participant.participant_code) }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Checkboxes -->
+                      <div class="control-group">
+                        <label>Data Types</label>
+                        <div class="checkbox-group">
+                          <label class="checkbox-label">
+                            <input 
+                              type="checkbox" 
+                              v-model="behavioralLogsForm.showTrades"
+                              class="checkbox-input"
+                            />
+                            <span class="checkbox-text">Trades</span>
+                          </label>
+                          <label class="checkbox-label">
+                            <input 
+                              type="checkbox" 
+                              v-model="behavioralLogsForm.showMessages"
+                              class="checkbox-input"
+                            />
+                            <span class="checkbox-text">Messages</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Statistics Section -->
+                    <div class="statistics-section">
+                      <div class="section-title">
+                        Session Statistics
+                        <button 
+                          class="refresh-btn" 
+                          @click="loadSessionStatistics"
+                          :disabled="isLoadingSessionStatistics"
+                          title="Refresh statistics"
+                        >
+                          <span v-if="isLoadingSessionStatistics">⟳</span>
+                          <span v-else>⟳</span>
+                        </button>
+                      </div>
+                      <div v-if="isLoadingSessionStatistics" class="loading-message">
+                        Loading session statistics...
+                      </div>
+                      <div v-else-if="!sessionStatisticsData" class="no-data-message">
+                        No session statistics available. Please ensure a session is loaded.
+                      </div>
+                      <div v-else class="stats-container">
+                        <!-- General Statistics -->
+                        <div class="stats-category">
+                          <div class="category-header">General</div>
+                          <div class="stats-list">
+                            <div class="stat-item">
+                              <span class="stat-label">Average Money Balance</span>
+                              <span class="stat-value">${{ sessionStatistics.averageMoney }}</span>
+                            </div>
+                            <div v-if="filteredParticipants.length > 1" class="stat-item">
+                              <span class="stat-label">Highest Wealth</span>
+                              <span class="stat-value">${{ sessionStatistics.highestWealth }} ({{ sessionStatistics.highestWealthParticipant }})</span>
+                            </div>
+                            <div v-if="filteredParticipants.length > 1" class="stat-item">
+                              <span class="stat-label">Lowest Wealth</span>
+                              <span class="stat-value">${{ sessionStatistics.lowestWealth }} ({{ sessionStatistics.lowestWealthParticipant }})</span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <!-- Trade Statistics -->
+                        <div v-if="behavioralLogsForm.showTrades" class="stats-category">
+                          <div class="category-header">Trade</div>
+                          <div class="stats-list">
+                            <div class="stat-item">
+                              <span class="stat-label">Total Successful Trades</span>
+                              <span class="stat-value">{{ sessionStatistics.totalTrades }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Avg Successful Trades</span>
+                              <span class="stat-value">{{ sessionStatistics.averageTrades }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Average Trade Price</span>
+                              <span class="stat-value">${{ sessionStatistics.averageTradePrice }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Price Range</span>
+                              <span class="stat-value">${{ sessionStatistics.minTradePrice }} - ${{ sessionStatistics.maxTradePrice }}</span>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <!-- Message Statistics -->
+                        <div v-if="behavioralLogsForm.showMessages" class="stats-category">
+                          <div class="category-header">Message</div>
+                          <div class="stats-list">
+                            <div class="stat-item">
+                              <span class="stat-label">Total Messages</span>
+                              <span class="stat-value">{{ sessionStatistics.totalMessages }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Avg Messages per User</span>
+                              <span class="stat-value">{{ sessionStatistics.averageMessages }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Avg Message Length (All)</span>
+                              <span class="stat-value">{{ sessionStatistics.averageMessageLength }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Avg Message Length (Human)</span>
+                              <span class="stat-value">{{ sessionStatistics.averageMessageLengthPerHuman }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Messages per Trade</span>
+                              <span class="stat-value">{{ sessionStatistics.averageMessagesPerTrade }}</span>
+                            </div>
+                            <div class="stat-item">
+                              <span class="stat-label">Avg Response Latency</span>
+                              <span class="stat-value">{{ sessionStatistics.averageMessageResponseLatency }}s</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Right Column: Charts -->
+                  <div class="right-column">
+                    <div class="charts-section">
+                      <div class="section-title">Charts</div>
+                      <div class="charts-grid">
+                        <!-- Chart 1: Trade Timeline (when trades are selected) -->
+                        <div v-if="behavioralLogsForm.showTrades" class="chart-container">
+                          <div class="chart-title">
+                            <span class="chart-title-text">Trade Timeline</span>
+                            <div class="chart-legend">
+                              <span class="legend-item">
+                                <span class="legend-color completed"></span>
+                                Completed Trades
+                              </span>
+                              <span class="legend-item">
+                                <span class="legend-color pending"></span>
+                                Pending Offers
+                              </span>
+                            </div>
+                          </div>
+                          <div class="chart-placeholder">
+                            <div v-if="timelineDataByParticipant.length === 0" class="chart-no-data">
+                              <div class="no-data-message">
+                                <div class="no-data-icon">Chart</div>
+                                <div class="no-data-text">No trade data available for selected participants</div>
+                              </div>
+                            </div>
+                                                                                                                                        <div v-else class="timeline-container">
+                              <!-- Y-axis label -->
+                              <div class="y-axis-label">Participants</div>
+                              
+                              <!-- Timeline rows -->
+                              <div class="timeline-rows">
+                                <div 
+                                  v-for="[participant, trades] in timelineDataByParticipant" 
+                                    :key="participant"
+                                    class="timeline-row"
+                                  >
+                                    <div class="participant-label">{{ participant }}</div>
+                                    <div class="timeline-bars">
+                                      <div 
+                                        v-for="(trade, index) in trades" 
+                                        :key="`${participant}-${index}`"
+                                        class="timeline-bar"
+                                        :style="{ 
+                                          left: getTimelinePosition(trade.firstTradeTime) + '%',
+                                          width: trade.isCompleted ? getTimelineWidth(trade.firstTradeTime, trade.lastTradeTime) + '%' : '2px'
+                                        }"
+                                        :class="{ 
+                                          completed: trade.isCompleted,
+                                          pending: !trade.isCompleted
+                                        }"
+                                        @mouseenter="showTimelineTooltip($event, trade, participant, index)"
+                                        @mouseleave="hideTooltip"
+                                      >
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                <!-- X-axis with time labels and label below -->
+                                <div class="timeline-x-axis">
+                                  <div class="x-axis-labels">
+                                    <span class="x-label start">0:00</span>
+                                    <span class="x-label middle">{{ getMiddleTimeLabel() }}</span>
+                                    <span class="x-label end">{{ getEndTimeLabel() }}</span>
+                                  </div>
+                                  <div class="x-axis-label">Time</div>
+                                </div>
+                              </div>
+                          </div>
+                        </div>
+
+                        <!-- Chart 2: Trade Numbers (when trades are selected) -->
+                        <div v-if="behavioralLogsForm.showTrades" class="chart-container">
+                          <div class="chart-title">
+                            Trade Numbers by Participant
+                          </div>
+                          <div class="chart-placeholder">
+                            <div v-if="chartData.participantChartData.length === 0" class="chart-no-data">
+                              <div class="no-data-message">
+                                <div class="no-data-icon">Chart</div>
+                                <div class="no-data-text">No trade data available for selected participants</div>
+                              </div>
+                            </div>
+                            <div v-else class="google-chart-container">
+                              <div id="trades-bar-chart" class="google-chart"></div>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <!-- Chart 3: Number of Sent Messages (when messages are selected) -->
+                        <div v-if="behavioralLogsForm.showMessages" class="chart-container">
+                          <div class="chart-title">
+                            Number of Sent Messages by Participant
+                          </div>
+                          <div class="chart-placeholder">
+                            <div v-if="chartData.participantChartData.length === 0" class="chart-no-data">
+                              <div class="no-data-message">
+                                <div class="no-data-icon">Chart</div>
+                                <div class="no-data-text">No message data available for selected participants</div>
+                              </div>
+                            </div>
+                            <div v-else class="google-chart-container">
+                              <div id="messages-bar-chart" class="google-chart"></div>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <!-- No data selected message -->
+                        <div v-if="!behavioralLogsForm.showTrades && !behavioralLogsForm.showMessages" class="no-data-selected">
+                          <div class="no-data-message">
+                            <div class="no-data-icon">Chart</div>
+                            <div class="no-data-text">Please select at least one data type to view charts</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              
+
+            </div>
+          </div>
+
+          <!-- Column 3: Trades (for Monitor tab) / Export Data (for Analysis tab) -->
+          <div class="tab-col" v-if="activeTab === 'monitor' || activeTab === 'analysis'">
+            <div class="col-body">
+              <div class="block-title">
+                <template v-if="activeTab === 'monitor'">
+                  Trades
+                  <div class="indicators">
+                    <span class="online-indicator">{{ totalTrades }} completed</span>
+                    <span class="online-indicator pending">{{ pendingTrades }} pending</span>
+                  </div>
+                </template>
+                <template v-else-if="activeTab === 'analysis'">Export Data</template>
+              </div>
+              <!-- Monitor: Trades -->
+              <template v-if="activeTab === 'monitor'">
+                <TradesFeed
+                  :pending-offers="pendingOffers"
+                  :completed-trades="completedTrades"
+                  :total-trades="totalTrades"
+                  :pending-trades="pendingTrades"
+                />
+              </template>
+              <!-- Analysis: Export Data -->
+              <template v-else-if="activeTab === 'analysis'">
+                <div class="export-form">
+                  <div class="form-group">
+                    <label for="data-type">Data to Export</label>
+                    <select 
+                      class="select" 
+                      v-model="exportForm.dataType"
+                      id="data-type"
+                    >
+                      <option value="all">All Data (Complete session export)</option>
+                      <option value="participants">Participants Data</option>
+                      <option value="trades">Trades Data</option>
+                      <option value="messages">Messages Data</option>
+                      <option value="logs">System Logs</option>
+                    </select>
+                  </div>
+                  
+                  <div class="form-group">
+                    <label for="file-format">File Format</label>
+                    <select 
+                      class="select" 
+                      v-model="exportForm.fileFormat"
+                      id="file-format"
+                    >
+                      <option value="json">JSON</option>
+                      <option value="csv">CSV</option>
+                      <option value="excel">Excel (.xlsx)</option>
+                    </select>
+                  </div>
+                  
+                  <div class="form-actions">
+                    <button 
+                      class="btn primary" 
+                      @click="exportData"
+                      :disabled="!isSessionRegistered"
+                    >
+                      Export Data
+                    </button>
+                  </div>
+                  
+                  <div v-if="!isSessionRegistered" class="form-helper">
+                    ⚠️ Create or load a session first to enable data export
+                  </div>
+                </div>
+              </template>
+              <!-- Default: Placeholder -->
+              <template v-else>
+                <div class="placeholder">Content will appear here.</div>
+              </template>
           </div>
         </div>
 
@@ -1596,6 +1789,8 @@
           </div>
         </div>
       </div>
+        </div>
+        
 
     <!-- Edit Participant Modal -->
     <div v-if="showEditModal" class="modal-overlay" @click="closeEditModal">
@@ -2065,8 +2260,6 @@
       </div>
     </div>
 
-
-    </div>
   
   <!-- Tooltip for timeline chart -->
   <div 
@@ -2085,6 +2278,7 @@ import { useRouter } from 'vue-router'
 import ParticipantsList from '@/components/ParticipantsList.vue'
 import TradesFeed from '@/components/TradesFeed.vue'
 import ConversationView from '@/components/ConversationView.vue'
+import MTurkPanel from '@/components/MTurkPanel.vue'
 import { BACKEND_URL } from '@/config.js'
 // @ts-ignore
 import io from 'socket.io-client'
@@ -2118,6 +2312,8 @@ interface Participant {
   current_round?: number // Added current_round for wordguessing experiments
   score?: number // Added score for wordguessing experiments
   internal_id?: string // Added internal_id (actual participant code)
+  initiative?: string // Added initiative for Hidden Profiles experiments (active/passive)
+  candidateDocumentId?: string // Added candidateDocumentId for Hidden Profiles experiments
 }
 
 interface Trade {
@@ -2287,6 +2483,145 @@ interface ExperimentInterfaceConfig {
   }
 }
 
+const saveHiddenProfilesCandidateNames = async () => {
+  if (!currentSessionCode.value) {
+    alert('Please register a session before saving candidate names.')
+    return
+  }
+
+  try {
+    const name = hiddenProfilesCandidateNameInput.value.trim()
+    if (!name) {
+      alert('Please enter a candidate name before saving.')
+      return
+    }
+
+    // Add to local list (avoid exact duplicates)
+    if (!hiddenProfilesCandidateNames.value.includes(name)) {
+      hiddenProfilesCandidateNames.value.push(name)
+    }
+
+    const names = hiddenProfilesCandidateNames.value
+
+    const response = await fetch('/api/hiddenprofiles/set-candidate-names', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        session_code: currentSessionCode.value,
+        candidate_names: names
+      })
+    })
+
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Candidate names saved:', result)
+      alert('Candidate names saved successfully.')
+      // Sync with server response if provided
+      if (Array.isArray(result.candidate_names)) {
+        hiddenProfilesCandidateNames.value = result.candidate_names
+      }
+      // Clear input after successful save
+      hiddenProfilesCandidateNameInput.value = ''
+    } else {
+      const error = await response.json()
+      console.error('❌ Failed to save candidate names:', error)
+      alert(`Failed to save candidate names: ${error.error ? String(error.error) : 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('❌ Error saving candidate names:', error)
+    alert('Error saving candidate names.')
+  }
+}
+
+const updateHiddenProfilesReadingTime = async () => {
+  if (!currentSessionCode.value) {
+    return
+  }
+
+  try {
+    const readingTime = hiddenProfilesReadingTime.value
+    if (readingTime < 1 || readingTime > 60) {
+      alert('Reading time must be between 1 and 60 minutes.')
+      hiddenProfilesReadingTime.value = 5
+      return
+    }
+
+    // Update hiddenProfiles config using the experiment config endpoint
+    const requestBody = {
+      session_code: currentSessionCode.value,
+      hiddenProfiles: {
+        readingTimeMinutes: readingTime
+      }
+    }
+    
+    const response = await fetch('/api/experiment/config', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody)
+    })
+
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Reading time updated:', readingTime)
+      // Update local experiment config to reflect the change
+      if (!experimentConfig.value.hiddenProfiles) {
+        experimentConfig.value.hiddenProfiles = {}
+      }
+      experimentConfig.value.hiddenProfiles.readingTimeMinutes = readingTime
+    } else {
+      const error = await response.json()
+      alert(`Failed to update reading time: ${error.error || 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('Error updating reading time:', error)
+    alert('Error updating reading time. Please try again.')
+  }
+}
+
+const removeHiddenProfilesCandidateName = async (index: number) => {
+  if (index < 0 || index >= hiddenProfilesCandidateNames.value.length) return
+
+  // Remove locally first
+  hiddenProfilesCandidateNames.value.splice(index, 1)
+
+  if (!currentSessionCode.value) {
+    // No session yet; just update local UI
+    return
+  }
+
+  try {
+    const response = await fetch('/api/hiddenprofiles/set-candidate-names', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        session_code: currentSessionCode.value,
+        candidate_names: hiddenProfilesCandidateNames.value
+      })
+    })
+
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Candidate names updated after removal:', result)
+      if (Array.isArray(result.candidate_names)) {
+        hiddenProfilesCandidateNames.value = result.candidate_names
+      }
+    } else {
+      const error = await response.json()
+      console.error('❌ Failed to update candidate names after removal:', error)
+      alert(`Failed to update candidate names: ${error.error ? String(error.error) : 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('❌ Error updating candidate names after removal:', error)
+    alert('Error updating candidate names.')
+  }
+}
+
 interface ExperimentTemplate {
   id: string
   name: string
@@ -2356,6 +2691,26 @@ const uploadedEssays = ref<Array<{
   file: File
 }>>([])
 
+// Hidden Profiles upload state
+const uploadedPublicInfo = ref<{
+  id: string
+  filename: string
+  title: string
+  file: File
+} | null>(null)
+
+const uploadedCandidateDocs = ref<Array<{
+  id: string
+  filename: string
+  title: string
+  file: File
+}>>([])
+
+// Hidden Profiles candidate names
+const hiddenProfilesCandidateNameInput = ref('')
+const hiddenProfilesCandidateNames = ref<string[]>([])
+const hiddenProfilesReadingTime = ref<number | null>(5) // Default 5 minutes
+
 // Experiment selection state
 const selectedExperimentType = ref('')
 
@@ -2372,7 +2727,8 @@ const parameterClustersExpanded = ref({
   shapeProduction: false,
   experimentSpecific: false,
   essayRanking: false,
-  wordguessing: true  // Expanded by default for wordguessing
+  wordguessing: true,  // Expanded by default for wordguessing
+  hiddenProfiles: true  // Expanded by default for hidden profiles
 })
 
 // WordGuessing word assignment
@@ -2633,6 +2989,54 @@ const availableExperiments: ExperimentTemplate[] = [
           enabled: true,
           type: 'wordguessing',
           instruction: 'Please guess the word the other participant is thinking of. You may also use the group chat to discuss your thoughts with other participants.'
+        },
+        trade: {
+          enabled: false,
+          showTradeHistory: false
+        },
+        socialPanel: {
+          showTradeTab: false,
+          showChatTab: true
+        }
+      }
+    }
+  },
+  {
+    id: 'hiddenprofiles',
+    name: 'Hidden Profiles',
+    description: '**Setup:** Participants work together to make decisions based on shared public information and unique candidate documents assigned to each participant.\n\n**Goal:** Investigate collaborative decision-making and information sharing.',
+    tags: ['Collaborative Decision Making'],
+    defaultConfig: {
+      sessionDuration: 15,
+    },
+    specificParams: [],
+    interfaceConfig: {
+      // Researcher Dashboard Interface Elements
+      awarenessDashboard: {
+        enabled: false,
+        showMoney: false,
+        showProductionCount: false,
+        showOrderProgress: false
+      },
+      actionStructures: {
+        enabled: false
+      },
+      participantInterface: {
+        myStatus: {
+          enabled: false,
+          showMoney: false,
+          showInventory: false
+        },
+        myAction: {
+          type: 'disabled',
+          showTradeForm: false,
+          showProductionForm: false,
+          showOrderForm: false
+        },
+        myTask: {
+          enabled: true,
+          type: 'hiddenprofiles',
+          instruction: 'Review the public information and your assigned candidate document. Collaborate with other participants to make decisions.'
         },
         trade: {
           enabled: false,
@@ -3037,6 +3441,7 @@ const proceedToInteractionVariables = () => {
 
 const proceedToParticipantRegistration = () => {
   activeSetupTab.value = 'participantRegistration'
+  setupTabs.value.mturkIntegration = true
   scrollToLatestTab()
 }
 
@@ -4016,7 +4421,8 @@ const setupTabs = ref({
   experimentSelection: false,  // Appears when user chooses create session
   parameters: false,          // Appears when experiment is selected
   interactionVariables: false, // Appears when parameters are configured
-  participantRegistration: false // Appears when interaction variables are set
+  participantRegistration: false, // Appears when interaction variables are set
+  mturkIntegration: false
 })
 
 // Current active tab
@@ -4028,7 +4434,8 @@ const setupWorkflowSteps = ref([
   { id: 'experimentSelection', label: 'Experiment Selection' },
   { id: 'parameters', label: 'Parameters' },
   { id: 'interactionVariables', label: 'Interaction Controls' },
-  { id: 'participantRegistration', label: 'Participant Registration' }
+  { id: 'participantRegistration', label: 'Participant Registration' },
+  { id: 'mturkIntegration', label: 'MTurk Integration' }
 ])
 
 // Watch for active tab changes to load statistics when analysis tab is selected
@@ -4398,14 +4805,25 @@ const updateExperimentConfig = async () => {
     })
     
     if (!response.ok) {
-      throw new Error('Failed to update config')
+      let errorMessage = 'Failed to update config'
+      try {
+        const errorData = await response.json()
+        errorMessage = errorData.error || errorData.message || errorMessage
+        console.error('❌ Backend error:', errorData)
+      } catch (parseError) {
+        const errorText = await response.text()
+        errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`
+        console.error('❌ Backend error (text):', errorText)
+      }
+      throw new Error(errorMessage)
     }
     
-    console.log('Config updated successfully')
+    const result = await response.json()
+    console.log('✅ Config updated successfully:', result)
     
   } catch (error: any) {
-    console.error('Error updating config:', error)
-    alert(`Failed to update configuration: ${error.message}`)
+    console.error('❌ Error updating config:', error)
+    alert(`Failed to update configuration: ${error.message || 'Unknown error'}`)
   }
 }
 
@@ -4463,10 +4881,21 @@ const saveExperimentConfigToDatabase = async (config: any) => {
     if (response.ok) {
       console.log('✅ Experiment config auto-saved')
     } else {
-      console.error('❌ Failed to auto-save experiment config')
+      let errorMessage = 'Failed to auto-save experiment config'
+      try {
+        const errorData = await response.json()
+        errorMessage = errorData.error || errorData.message || errorMessage
+        console.error('❌ Failed to auto-save experiment config:', errorData)
+      } catch (parseError) {
+        const errorText = await response.text()
+        errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`
+        console.error('❌ Failed to auto-save experiment config (text):', errorText)
+      }
+      // Don't show alert for auto-save failures, just log
     }
   } catch (error) {
-    console.error('Error auto-saving experiment config:', error)
+    console.error('❌ Error auto-saving experiment config:', error)
+    // Don't show alert for auto-save failures, just log
   }
 }
 
@@ -4649,6 +5078,83 @@ const resumeExperiment = async () => {
   }
 }
 
+const deleteSession = async () => {
+  // Show confirmation dialog
+  const confirmed = confirm('⚠️ WARNING: This will PERMANENTLY DELETE the session and all its data.\nThis action cannot be undone.\n\nAre you sure you want to delete this session?')
+  
+  if (!confirmed) {
+    console.log('❌ Session deletion cancelled by user')
+    return
+  }
+  
+  if (!activeSessionCode.value) {
+    console.error('❌ No active session to delete')
+    alert('No active session to delete')
+    return
+  }
+  
+  try {
+    console.log('🗑️ Deleting session:', activeSessionCode.value)
+    
+    // Immediately clear data arrays for instant feedback
+    participants.value = []
+    pendingOffers.value = []
+    completedTrades.value = []
+    messages.value = []
+    
+    console.log('✅ Cleared frontend data arrays')
+    
+    const response = await fetch('/api/sessions/delete', {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_code: activeSessionCode.value
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Session deleted successfully:', result)
+      
+      // Update experiment status immediately
+      experimentStatus.value = 'waiting'
+      stopLocalTimer() // Stop local timer when session is deleted
+      
+      // Update session state since session was deleted
+      isSessionRegistered.value = false
+      currentSessionCode.value = ''
+      activeSessionCode.value = ''
+      sessionValidationMessage.value = 'Session was deleted. Please register a new session before adding participants.'
+      sessionValidationMessageType.value = 'info'
+      
+      // Clear uploaded essays
+      uploadedEssays.value = []
+      // Clear Hidden Profiles uploads
+      uploadedPublicInfo.value = null
+      uploadedCandidateDocs.value = []
+      
+      // Refresh data from server to ensure consistency
+      await loadInitialData()
+      
+      console.log('✅ Session deletion complete - all data cleared and refreshed')
+      alert('Session deleted successfully')
+    } else {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+      console.error('❌ Failed to delete session:', errorData)
+      alert(`Failed to delete session: ${errorData.error || 'Unknown error'}`)
+      // Restore data if deletion failed
+      await loadInitialData()
+    }
+  } catch (error) {
+    console.error('❌ Error deleting session:', error)
+    alert(`Error deleting session: ${error.message}`)
+    // Restore data if deletion failed
+    await loadInitialData()
+  }
+}
+
 const resetExperiment = async () => {
   // Show confirmation dialog
   const confirmed = confirm('⚠️ WARNING: This will delete all current session data including uploaded essays and rankings. \nAre you sure you want to proceed?')
@@ -4695,6 +5201,9 @@ const resetExperiment = async () => {
       
       // Clear uploaded essays
       uploadedEssays.value = []
+      // Clear Hidden Profiles uploads
+      uploadedPublicInfo.value = null
+      uploadedCandidateDocs.value = []
       
       // Refresh data from server to ensure consistency
       await loadInitialData()
@@ -4730,6 +5239,9 @@ const resetTimer = async () => {
     completedTrades.value = []
     messages.value = []
     uploadedEssays.value = []
+    // Clear Hidden Profiles uploads
+    uploadedPublicInfo.value = null
+    uploadedCandidateDocs.value = []
     
     
     const response = await fetch('/api/experiment/timer-reset', {
@@ -5029,6 +5541,12 @@ const loadExperimentConfig = async () => {
         console.log('✅ Restored wordguessing word list:', data.config.wordList)
       }
       
+      // Restore Hidden Profiles reading time if it exists
+      if (selectedExperimentType.value === 'hiddenprofiles' && data.config.hiddenProfiles?.readingTimeMinutes) {
+        hiddenProfilesReadingTime.value = data.config.hiddenProfiles.readingTimeMinutes
+        console.log('✅ Restored Hidden Profiles reading time:', hiddenProfilesReadingTime.value)
+      }
+      
       console.log('✅ Session-specific experiment config loaded:', {
         communicationLevel: data.config.communicationLevel,
         awarenessDashboard: data.config.awarenessDashboard,
@@ -5045,8 +5563,14 @@ const loadSessionExperimentType = async () => {
     // Only load experiment type if we have an active session
     if (!isSessionRegistered.value || !currentSessionCode.value) {
       console.log('⚠️ No active session - skipping experiment type load')
+      // Clear experiment-specific data when no session
+      hiddenProfilesCandidateNames.value = []
+      uploadedCandidateDocs.value = []
       return
     }
+    
+    // Store previous experiment type to check if we're switching
+    const previousExperimentType = selectedExperimentType.value
     
     const response = await fetch(`/api/session/current?session_code=${encodeURIComponent(currentSessionCode.value)}`)
     if (!response.ok) {
@@ -5055,6 +5579,14 @@ const loadSessionExperimentType = async () => {
     
     const data = await response.json()
     console.log('Session data loaded:', data)
+    
+    // Clear Hidden Profiles data if switching away from hiddenprofiles or if experiment type changed
+    if (previousExperimentType === 'hiddenprofiles' && data.experiment_type !== 'hiddenprofiles') {
+      console.log('🧹 Clearing Hidden Profiles data - switching away from hiddenprofiles experiment')
+      hiddenProfilesCandidateNames.value = []
+      uploadedCandidateDocs.value = []
+      hiddenProfilesReadingTime.value = 5 // Reset to default
+    }
     
     // Set the experiment type as selected if it exists
     if (data.experiment_type) {
@@ -5079,6 +5611,12 @@ const loadSessionExperimentType = async () => {
         if (experimentType === 'essayranking') {
           await loadSessionEssays()
         }
+        
+        // Load Hidden Profiles data if experiment type is hiddenprofiles
+        if (experimentType === 'hiddenprofiles') {
+          console.log('📥 Loading Hidden Profiles session data from config:', data.config)
+          await loadHiddenProfilesSessionData(data.config || {})
+        }
       } else {
         console.warn('🔧 Unknown experiment type in session:', experimentType)
       }
@@ -5086,6 +5624,9 @@ const loadSessionExperimentType = async () => {
     
   } catch (error) {
     console.error('Error loading session experiment type:', error)
+    // Clear data on error
+    hiddenProfilesCandidateNames.value = []
+    uploadedCandidateDocs.value = []
   }
 }
 
@@ -5118,6 +5659,82 @@ const loadSessionEssays = async () => {
   }
 }
 
+const loadHiddenProfilesSessionData = async (experimentConfig: any) => {
+  try {
+    if (!isSessionRegistered.value || !currentSessionCode.value) {
+      console.log('⚠️ No active session - skipping Hidden Profiles data load')
+      // Clear data if no session
+      hiddenProfilesCandidateNames.value = []
+      uploadedCandidateDocs.value = []
+      hiddenProfilesReadingTime.value = 5 // Reset to default
+      return
+    }
+    
+    // IMPORTANT: Clear existing data first to avoid showing data from previous session
+    console.log('🧹 Clearing existing Hidden Profiles data before loading new session data')
+    hiddenProfilesCandidateNames.value = []
+    uploadedCandidateDocs.value = []
+    hiddenProfilesReadingTime.value = 5 // Reset to default
+    
+    console.log('📦 Received experimentConfig:', experimentConfig)
+    console.log('📦 Experiment config keys:', experimentConfig ? Object.keys(experimentConfig) : 'null/undefined')
+    
+    const hiddenProfilesConfig = experimentConfig?.hiddenProfiles || {}
+    console.log('📦 Hidden Profiles config:', hiddenProfilesConfig)
+    console.log('📦 Hidden Profiles config keys:', Object.keys(hiddenProfilesConfig))
+    
+    // Load reading time
+    if (hiddenProfilesConfig.readingTimeMinutes) {
+      hiddenProfilesReadingTime.value = hiddenProfilesConfig.readingTimeMinutes
+      console.log('✅ Loaded Hidden Profiles reading time:', hiddenProfilesReadingTime.value)
+    } else {
+      hiddenProfilesReadingTime.value = 5 // Reset to default if not set
+    }
+    
+    // Load candidate names (always set, even if empty array)
+    if (hiddenProfilesConfig.candidateNames && Array.isArray(hiddenProfilesConfig.candidateNames)) {
+      hiddenProfilesCandidateNames.value = [...hiddenProfilesConfig.candidateNames]
+      console.log('✅ Loaded Hidden Profiles candidate names:', hiddenProfilesCandidateNames.value.length, 'names')
+    } else {
+      hiddenProfilesCandidateNames.value = []
+      console.log('✅ No candidate names found in session - cleared array')
+    }
+    
+    // Load candidate documents (always set, even if empty array)
+    if (hiddenProfilesConfig.candidateDocs && Array.isArray(hiddenProfilesConfig.candidateDocs)) {
+      uploadedCandidateDocs.value = hiddenProfilesConfig.candidateDocs.map((doc: any) => ({
+        id: doc.doc_id,
+        filename: doc.filename || doc.saved_filename || 'unknown.pdf',
+        title: doc.title || doc.filename || 'Untitled Document',
+        file: null, // We don't have the original file, just the metadata
+        // Preserve backend data for reference
+        saved_filename: doc.saved_filename,
+        file_url: doc.file_url,
+        content: doc.content
+      }))
+      console.log('✅ Loaded Hidden Profiles candidate documents:', uploadedCandidateDocs.value.length, 'documents')
+    } else {
+      uploadedCandidateDocs.value = []
+      console.log('✅ No candidate documents found in session - cleared array')
+    }
+    
+    // Load public info (if exists)
+    if (hiddenProfilesConfig.publicInfo) {
+      console.log('✅ Loaded Hidden Profiles public info:', hiddenProfilesConfig.publicInfo.title || 'Untitled')
+    }
+    
+    // Note: Participant initiatives and candidate doc assignments are loaded when participants are loaded
+    // They are stored in the experiment_config and will be available when we load participants
+    
+    console.log('✅ Hidden Profiles session data loaded successfully')
+  } catch (error) {
+    console.error('Error loading Hidden Profiles session data:', error)
+    // Clear data on error to avoid stale state
+    hiddenProfilesCandidateNames.value = []
+    uploadedCandidateDocs.value = []
+  }
+}
+
 const loadParticipants = async () => {
   try {
     // Only load participants if we have a registered session
@@ -5134,11 +5751,97 @@ const loadParticipants = async () => {
     const data = await response.json()
     
     // Filter participants by current session code on frontend as backup
-    const filteredData = data.filter((p: Participant) => 
+    const filteredData = data.filter((p: any) => 
       p.session_code === currentSessionCode.value
     )
     
-    participants.value = filteredData
+    // Load experiment config to get Hidden Profiles participant assignments
+    let hiddenProfilesConfig: any = {}
+    if (selectedExperimentType.value === 'hiddenprofiles') {
+      try {
+        const configResponse = await fetch(`/api/experiment/config?session_code=${encodeURIComponent(currentSessionCode.value)}`)
+        if (configResponse.ok) {
+          const configData = await configResponse.json()
+          hiddenProfilesConfig = configData.config?.hiddenProfiles || {}
+        }
+      } catch (error) {
+        console.warn('Could not load experiment config for participant assignments:', error)
+      }
+    }
+    
+    // Normalize fields so id/internal_id always carry the participant_code
+    participants.value = filteredData.map((p: any) => {
+      const participantCode = p.participant_code || p.id
+      
+      // For Hidden Profiles, restore initiative and candidate document assignments
+      let initiative = p.initiative || ''
+      let candidateDocumentId = p.candidateDocumentId || ''
+      
+      if (selectedExperimentType.value === 'hiddenprofiles' && hiddenProfilesConfig) {
+        // Get initiative from experiment_config
+        // The backend stores initiatives with the full participant_code (e.g., 'bob_test1')
+        const participantInitiatives = hiddenProfilesConfig.participantInitiatives || {}
+        
+        // Try multiple formats to find the initiative
+        // 1. Try exact match with participantCode
+        if (participantInitiatives[participantCode]) {
+          initiative = participantInitiatives[participantCode]
+        } else {
+          // 2. Try with session suffix if participantCode doesn't have it
+          if (currentSessionCode.value && !participantCode.includes('_')) {
+            const fullCode = `${participantCode}_${currentSessionCode.value}`
+            if (participantInitiatives[fullCode]) {
+              initiative = participantInitiatives[fullCode]
+            }
+          }
+          // 3. Try base code (remove session suffix) if full code not found
+          if (!initiative && participantCode.includes('_')) {
+            const baseCode = participantCode.split('_').slice(0, -1).join('_')
+            if (baseCode && participantInitiatives[baseCode]) {
+              initiative = participantInitiatives[baseCode]
+            }
+          }
+        }
+        
+        // Get candidate document assignment from experiment_config
+        const participantCandidateDocs = hiddenProfilesConfig.participantCandidateDocs || {}
+        // Try multiple formats to find the candidate document
+        if (participantCandidateDocs[participantCode]) {
+          candidateDocumentId = participantCandidateDocs[participantCode]
+        } else {
+          // Try with session suffix if participantCode doesn't have it
+          if (currentSessionCode.value && !participantCode.includes('_')) {
+            const fullCode = `${participantCode}_${currentSessionCode.value}`
+            if (participantCandidateDocs[fullCode]) {
+              candidateDocumentId = participantCandidateDocs[fullCode]
+            }
+          }
+          // Try base code (remove session suffix) if full code not found
+          if (!candidateDocumentId && participantCode.includes('_')) {
+            const baseCode = participantCode.split('_').slice(0, -1).join('_')
+            if (baseCode && participantCandidateDocs[baseCode]) {
+              candidateDocumentId = participantCandidateDocs[baseCode]
+            }
+          }
+        }
+      }
+      
+      return {
+        ...p,
+        // Preserve original participant_code (includes session suffix for agents)
+        participant_code: participantCode,
+        // Use participant_code as stable identifier in the UI
+        id: participantCode,
+        internal_id: participantCode,
+        // Restore Hidden Profiles assignments
+        initiative: initiative,
+        candidateDocumentId: candidateDocumentId
+      }
+    })
+    
+    if (selectedExperimentType.value === 'hiddenprofiles') {
+      console.log('✅ Loaded participants with Hidden Profiles assignments:', participants.value.length, 'participants')
+    }
     // console.log(`✅ Loaded ${filteredData.length} participants for session ${currentSessionCode.value}`)
     // console.log('DEBUG: Participant types:', filteredData.map(p => ({ id: p.id, type: p.type })))
   } catch (error) {
@@ -5447,6 +6150,9 @@ const initializeWebSocket = () => {
       completedTrades.value = []
       messages.value = []
       uploadedEssays.value = []
+      // Clear Hidden Profiles uploads
+      uploadedPublicInfo.value = null
+      uploadedCandidateDocs.value = []
       
       console.log('✅ Cleared all data arrays and uploaded essays on reset')
       
@@ -5469,6 +6175,9 @@ const initializeWebSocket = () => {
       completedTrades.value = []
       messages.value = []
       uploadedEssays.value = []
+      // Clear Hidden Profiles uploads
+      uploadedPublicInfo.value = null
+      uploadedCandidateDocs.value = []
       
       console.log('✅ Cleared game data arrays and uploaded essays on timer reset')
       
@@ -5994,7 +6703,7 @@ const closeGroupingModal = () => {
 // Get group name for a participant
 const getParticipantGroup = (participantId: string) => {
   for (const [groupName, participantIds] of Object.entries(groups.value)) {
-    if (participantIds.includes(participantId)) {
+    if (Array.isArray(participantIds) && participantIds.includes(participantId)) {
       return groupName
     }
   }
@@ -6282,6 +6991,7 @@ const createSession = async () => {
       setupTabs.value.parameters = true
       setupTabs.value.interactionVariables = true
       setupTabs.value.participantRegistration = true
+      setupTabs.value.mturkIntegration = true
       activeSetupTab.value = 'experimentSelection'
       scrollToTab('experimentSelection')
       
@@ -6313,6 +7023,13 @@ const loadSession = async () => {
   isLoadingSession.value = true
   
   try {
+    // Clear Hidden Profiles data before loading new session
+    console.log('🧹 Clearing Hidden Profiles data before loading new session')
+    hiddenProfilesCandidateNames.value = []
+    uploadedCandidateDocs.value = []
+    uploadedPublicInfo.value = null
+    hiddenProfilesReadingTime.value = 5 // Reset to default
+    
     // Set the session ID
     experimentConfig.value.sessionId = loadSessionForm.value.sessionId.trim()
     
@@ -6347,6 +7064,7 @@ const loadSession = async () => {
       setupTabs.value.parameters = true
       setupTabs.value.interactionVariables = true
       setupTabs.value.participantRegistration = true
+      setupTabs.value.mturkIntegration = true
       activeSetupTab.value = 'experimentSelection'
       scrollToTab('experimentSelection')
       
@@ -6485,6 +7203,15 @@ const deleteSelectedTemplate = async () => {
 const onExperimentTypeChange = async () => {
   if (!selectedExperimentType.value) {
     return
+  }
+  
+  // Clear Hidden Profiles data if switching away from hiddenprofiles
+  if (selectedExperimentType.value !== 'hiddenprofiles') {
+    console.log('🧹 Clearing Hidden Profiles data - switching away from hiddenprofiles experiment')
+    hiddenProfilesCandidateNames.value = []
+    uploadedCandidateDocs.value = []
+    uploadedPublicInfo.value = null
+    hiddenProfilesReadingTime.value = 5 // Reset to default
   }
   
   const selectedExperiment = allAvailableExperiments.value.find(exp => exp.id === selectedExperimentType.value)
@@ -7241,6 +7968,366 @@ const assignEssaysToSession = async () => {
   }
 }
 
+// Hidden Profiles file upload handlers
+const handlePublicInfoFileUpload = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  
+  if (!files || files.length === 0) {
+    return
+  }
+
+  const file = files[0]
+  
+  // Validate file type
+  const validTypes = ['application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+  if (!validTypes.some(type => file.type.includes(type.split('/')[1]) || file.name.match(/\.(pdf|txt|doc|docx)$/i))) {
+    alert(`File ${file.name} is not a supported format. Please upload PDF, TXT, DOC, or DOCX files.`)
+    return
+  }
+  
+  // Generate unique ID
+  const docId = `publicinfo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  
+  // Prompt user for document title
+  const title = prompt(`Enter a title/display name for "${file.name}":`)
+  if (!title || title.trim() === '') {
+    alert('Document title is required. Please try again.')
+    return
+  }
+  
+  // Set uploaded public info
+  uploadedPublicInfo.value = {
+    id: docId,
+    filename: file.name,
+    title: title.trim(),
+    file: file
+  }
+  
+  // Reset file input
+  if (target) {
+    target.value = ''
+  }
+  
+  // Assign to session if we have one
+  if (currentSessionCode.value) {
+    await assignPublicInfoToSession()
+  }
+}
+
+const removePublicInfo = () => {
+  uploadedPublicInfo.value = null
+  
+  // Update session if we have one
+  if (currentSessionCode.value) {
+    assignPublicInfoToSession()
+  }
+}
+
+const assignPublicInfoToSession = async () => {
+  if (!currentSessionCode.value) {
+    console.warn('No active session to assign public information to')
+    return
+  }
+  
+  try {
+    const formData = new FormData()
+    formData.append('session_code', currentSessionCode.value)
+    
+    if (uploadedPublicInfo.value) {
+      formData.append('public_info_metadata', JSON.stringify({
+        doc_id: uploadedPublicInfo.value.id,
+        title: uploadedPublicInfo.value.title,
+        filename: uploadedPublicInfo.value.filename
+      }))
+      formData.append('public_info_file', uploadedPublicInfo.value.file, uploadedPublicInfo.value.filename)
+    }
+    
+    const response = await fetch('/api/hiddenprofiles/assign-public-info', {
+      method: 'POST',
+      body: formData
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Public information assigned to session:', result)
+      alert(`✅ Successfully assigned public information to session!`)
+    } else {
+      const error = await response.json()
+      console.error('❌ Failed to assign public information:', error)
+      alert(`Failed to assign public information: ${error.error ? String(error.error) : 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('❌ Error assigning public information:', error)
+    alert('Error assigning public information to session')
+  }
+}
+
+const handleCandidateDocsFileUpload = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  
+  if (!files || files.length === 0) {
+    return
+  }
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    
+    // Validate file type
+    const validTypes = ['application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']
+    if (!validTypes.some(type => file.type.includes(type.split('/')[1]) || file.name.match(/\.(pdf|txt|doc|docx)$/i))) {
+      alert(`File ${file.name} is not a supported format. Please upload PDF, TXT, DOC, or DOCX files.`)
+      continue
+    }
+    
+    // Generate unique ID
+    const docId = `candidatedoc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${i}`
+    
+    // Prompt user for document title
+    const title = prompt(`Enter a title/display name for "${file.name}":`)
+    if (!title || title.trim() === '') {
+      alert('Document title is required. Please try again.')
+      continue
+    }
+    
+    // Add to uploaded candidate docs list
+    uploadedCandidateDocs.value.push({
+      id: docId,
+      filename: file.name,
+      title: title.trim(),
+      file: file
+    })
+  }
+  
+  // Reset file input
+  if (target) {
+    target.value = ''
+  }
+  
+  // Assign to session if we have one
+  if (currentSessionCode.value && uploadedCandidateDocs.value.length > 0) {
+    await assignCandidateDocsToSession()
+  }
+}
+
+const removeCandidateDoc = (index: number) => {
+  uploadedCandidateDocs.value.splice(index, 1)
+  
+  // Update session if we have one
+  if (currentSessionCode.value) {
+    assignCandidateDocsToSession()
+  }
+}
+
+const assignCandidateDocsToSession = async () => {
+  if (!currentSessionCode.value) {
+    console.warn('No active session to assign candidate documents to')
+    return
+  }
+  
+  try {
+    const formData = new FormData()
+    formData.append('session_code', currentSessionCode.value)
+    
+    // Add candidate documents metadata
+    const docsMetadata = uploadedCandidateDocs.value.map(doc => ({
+      doc_id: doc.id,
+      title: doc.title,
+      filename: doc.filename
+    }))
+    formData.append('candidate_docs_metadata', JSON.stringify(docsMetadata))
+    
+    // Add files
+    uploadedCandidateDocs.value.forEach((doc, index) => {
+      if (doc.file) {
+        formData.append(`candidate_doc_file_${index}`, doc.file, doc.filename)
+      }
+    })
+    
+    const response = await fetch('/api/hiddenprofiles/assign-candidate-docs', {
+      method: 'POST',
+      body: formData
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Candidate documents assigned to session:', result)
+      // Only show alert if this was a user-initiated action (not a background sync)
+      // We can detect this by checking if any documents have files (new uploads)
+      const hasNewFiles = uploadedCandidateDocs.value.some(doc => doc.file !== null)
+      if (hasNewFiles) {
+        alert(`✅ Successfully assigned ${result.docs_assigned ? String(result.docs_assigned) : uploadedCandidateDocs.value.length} candidate documents to session!`)
+      }
+    } else {
+      const error = await response.json()
+      console.error('❌ Failed to assign candidate documents:', error)
+      alert(`Failed to assign candidate documents: ${error.error ? String(error.error) : 'Unknown error'}`)
+    }
+  } catch (error) {
+    console.error('❌ Error assigning candidate documents:', error)
+    alert('Error assigning candidate documents to session')
+  }
+}
+
+// Hidden Profiles participant assignment handlers
+// Helper function to get full participant code (with session suffix if needed)
+const getFullParticipantCode = (participant: any): string => {
+  // If participant_code already includes session suffix, use it
+  if (participant.participant_code && participant.participant_code.includes('_')) {
+    return participant.participant_code
+  }
+  // If it's an agent and we have session code, construct the full code
+  if ((participant.type === 'ai' || participant.type === 'ai_agent') && currentSessionCode.value) {
+    const baseCode = participant.participant_code || participant.id || participant.internal_id
+    if (baseCode && !baseCode.includes('_')) {
+      return `${baseCode}_${currentSessionCode.value}`
+    }
+  }
+  // Otherwise, use whatever we have
+  return participant.participant_code || participant.internal_id || participant.id || ''
+}
+
+const updateParticipantInitiative = async (participantId: string, initiative: string) => {
+  if (!currentSessionCode.value) {
+    console.error('❌ No session code available')
+    alert('No active session. Please register a session first.')
+    return
+  }
+  
+  if (!initiative || initiative.trim() === '') {
+    console.log('⚠️ No initiative selected, skipping update')
+    return
+  }
+  
+  if (!participantId) {
+    console.error('❌ No participant ID provided')
+    alert('Participant ID is missing')
+    return
+  }
+  
+  // Find the participant object to get the full participant_code
+  const participant = participants.value.find((p: any) => 
+    p.id === participantId || p.internal_id === participantId || p.participant_code === participantId
+  )
+  
+  // Get the full participant code (with session suffix for agents)
+  const fullParticipantCode = participant ? getFullParticipantCode(participant) : participantId
+  
+  try {
+    console.log('🔄 Updating participant initiative:', {
+      session_code: currentSessionCode.value,
+      participant_id: fullParticipantCode,
+      original_participant_id: participantId,
+      initiative: initiative
+    })
+    
+    const response = await fetch('/api/hiddenprofiles/update-participant-initiative', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_code: currentSessionCode.value,
+        participant_id: fullParticipantCode,
+        initiative: initiative
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Participant initiative updated:', result)
+      // Reload participants to reflect the change
+      await loadParticipants()
+    } else {
+      let errorMessage = 'Unknown error'
+      try {
+        const error = await response.json()
+        errorMessage = error.error || error.message || JSON.stringify(error)
+        console.error('❌ Failed to update participant initiative:', error)
+      } catch (parseError) {
+        const errorText = await response.text()
+        errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`
+        console.error('❌ Failed to parse error response:', errorText)
+      }
+      alert(`Failed to update participant initiative: ${errorMessage}`)
+    }
+  } catch (error) {
+    console.error('❌ Error updating participant initiative:', error)
+    alert(`Error updating participant initiative: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  }
+}
+
+const updateParticipantCandidateDocument = async (participantId: string, candidateDocumentId: string) => {
+  if (!currentSessionCode.value) {
+    console.error('❌ No session code available')
+    alert('No active session. Please register a session first.')
+    return
+  }
+  
+  if (!candidateDocumentId || candidateDocumentId.trim() === '') {
+    console.log('⚠️ No candidate document selected, skipping update')
+    return
+  }
+  
+  if (!participantId) {
+    console.error('❌ No participant ID provided')
+    alert('Participant ID is missing')
+    return
+  }
+  
+  // Find the participant object to get the full participant_code
+  const participant = participants.value.find((p: any) => 
+    p.id === participantId || p.internal_id === participantId || p.participant_code === participantId
+  )
+  
+  // Get the full participant code (with session suffix for agents)
+  const fullParticipantCode = participant ? getFullParticipantCode(participant) : participantId
+  
+  try {
+    console.log('🔄 Updating participant candidate document:', {
+      session_code: currentSessionCode.value,
+      participant_id: fullParticipantCode,
+      original_participant_id: participantId,
+      candidate_document_id: candidateDocumentId
+    })
+    
+    const response = await fetch('/api/hiddenprofiles/update-participant-candidate-doc', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        session_code: currentSessionCode.value,
+        participant_id: fullParticipantCode,
+        candidate_document_id: candidateDocumentId
+      })
+    })
+    
+    if (response.ok) {
+      const result = await response.json()
+      console.log('✅ Participant candidate document updated:', result)
+      // Reload participants to reflect the change
+      await loadParticipants()
+    } else {
+      let errorMessage = 'Unknown error'
+      try {
+        const error = await response.json()
+        errorMessage = error.error || error.message || JSON.stringify(error)
+        console.error('❌ Failed to update participant candidate document:', error)
+      } catch (parseError) {
+        const errorText = await response.text()
+        errorMessage = errorText || `HTTP ${response.status}: ${response.statusText}`
+        console.error('❌ Failed to parse error response:', errorText)
+      }
+      alert(`Failed to update participant candidate document: ${errorMessage}`)
+    }
+  } catch (error) {
+    console.error('❌ Error updating participant candidate document:', error)
+    alert(`Error updating participant candidate document: ${error instanceof Error ? error.message : 'Unknown error'}`)
+  }
+}
+
 const handleECLFileUpload = async (eclContent: string, fileName: string) => {
   try {
     // Send ECL content to backend for validation and processing
@@ -7684,6 +8771,7 @@ const createSessionFromParameters = async () => {
       setupTabs.value.parameters = true
       setupTabs.value.interactionVariables = true
       setupTabs.value.participantRegistration = true
+      setupTabs.value.mturkIntegration = true
       activeSetupTab.value = 'experimentSelection'
       scrollToTab('experimentSelection')
       
@@ -9104,7 +10192,8 @@ const renderMessagesBarChart = () => {
   gap: 8px;
   min-width: max-content;
   width: max-content;
-  max-width: calc(3 * (200px + 8px)); /* Limit to 3 subtabs, each 200px wide + 8px gap */
+  /* Removed max-width constraint to allow all subtabs to fit on one row */
+  /* With horizontal scroll if needed (handled by parent overflow-x: auto) */
 }
 
 .subtab-item {
@@ -10874,6 +11963,11 @@ const renderMessagesBarChart = () => {
   gap: 16px;
 }
 
+/* Allow certain config groups to span the full grid width */
+.config-grid .config-group.full-width {
+  grid-column: 1 / -1;
+}
+
 .config-group {
   display: flex;
   flex-direction: column;
@@ -10906,6 +12000,38 @@ const renderMessagesBarChart = () => {
   border-radius: 6px;
   width: 100%;
   font-size: 14px;
+}
+
+/* Candidate names input row: input + button on the same line */
+.candidate-name-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.candidate-name-input-row .config-input {
+  flex: 1 1 auto;
+}
+
+.candidate-name-input-row .upload-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.candidate-names-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.candidate-names-table th,
+.candidate-names-table td {
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.candidate-names-table th:first-child,
+.candidate-names-table td:first-child {
+  text-align: left;
 }
 
 .config-group .config-select {
@@ -11097,19 +12223,18 @@ const renderMessagesBarChart = () => {
 .manage-table {
   border: 1px solid #e5e7eb;
   border-radius: 6px; /* Reduced from 8px */
-  overflow: hidden;
   background: #ffffff;
   flex: 1; /* Added to make table fill remaining space */
   min-height: 0; /* Added to allow proper flex behavior */
   display: flex; /* Added to make table body fill space */
   flex-direction: column; /* Added to stack table elements vertically */
-  overflow: hidden; /* Prevent table from scrolling */
+  overflow-x: auto; /* Enable horizontal scroll when table is wider than container */
 }
 
 .table-body {
   flex: 1; /* Added to make table body fill remaining space */
-  overflow-y: auto; /* Added scroll if needed */
-  overflow-x: hidden; /* Prevent horizontal scrolling */
+  overflow-y: auto; /* Vertical scroll if needed */
+  overflow-x: visible; /* Let horizontal scroll be handled by .manage-table */
   min-height: 0; /* Added to allow proper flex behavior */
   scrollbar-width: thin; /* Firefox */
   scrollbar-color: #cbd5e1 #f1f5f9; /* Firefox */
@@ -11136,14 +12261,15 @@ const renderMessagesBarChart = () => {
 
 .tr {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  /* Columns: Display Name | Type | Role/Specialty/Initiative | Doc | Group | Actions */
+  grid-template-columns: 0.6fr 0.3fr 0.8fr 0.8fr 0.5fr 0.5fr;
   gap: 6px; /* Further reduced from 8px */
   align-items: center;
 }
 
 .table-head {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  grid-template-columns: 0.6fr 0.3fr 0.8fr 0.8fr 0.5fr 0.5fr;
   gap: 6px;
   align-items: center;
   background: #f8fafc;
@@ -11169,6 +12295,12 @@ const renderMessagesBarChart = () => {
 
 .table-body .tr:hover {
   background: #f9fafb;
+}
+
+/* Ensure header + body share a minimum width so each participant row stays on one line */
+.manage-table .table-head,
+.manage-table .table-body {
+  max-width: 900px;
 }
 
 .table-body .tr:last-child {
@@ -11198,6 +12330,21 @@ const renderMessagesBarChart = () => {
 
 .td.specialty {
   font-size: 10px; /* Reduced from 11px */
+  justify-content: flex-start;
+}
+
+.td.role {
+  font-size: 10px;
+  justify-content: flex-start;
+}
+
+.td.initiative {
+  font-size: 10px;
+  justify-content: flex-start;
+}
+
+.td.candidate-doc {
+  font-size: 10px;
   justify-content: flex-start;
 }
 
@@ -11272,6 +12419,12 @@ const renderMessagesBarChart = () => {
   max-width: 100%;
 }
 
+.no-initiative {
+  color: #9ca3af;
+  font-style: italic;
+  font-size: 10px;
+}
+
 .no-group {
   color: #9ca3af;
   font-style: italic;
@@ -11332,6 +12485,22 @@ const renderMessagesBarChart = () => {
   background: #eff6ff;
   color: #1d4ed8;
   transform: scale(1.05);
+}
+
+/* Small select for table cells */
+.select-small {
+  padding: 4px 5px;
+  font-size: 10px;
+  min-width: 50px; /* narrower dropdown to better fit the smaller columns */
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: white;
+}
+
+.select-small:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
 /* Improve select styling in table */
@@ -13060,10 +14229,10 @@ const renderMessagesBarChart = () => {
 /* Essay Upload Styles */
 .essay-upload-section {
   margin-top: 20px;
-  padding: 20px;
-  border: 2px dashed #d1d5db;
+  /* padding: 20px; */
+  /* border: 2px dashed #d1d5db; */
   border-radius: 8px;
-  background-color: #f9fafb;
+  /* background-color: #f9fafb; */
 }
 
 .essay-upload-section.full-width {
@@ -13180,4 +14349,5 @@ const renderMessagesBarChart = () => {
   font-size: 12px;
   line-height: 1;
 }
-</style> 
+
+</style>

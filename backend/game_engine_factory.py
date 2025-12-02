@@ -10,6 +10,7 @@ from game_engine import GameEngine
 from daytrader_game_engine import DayTraderGameEngine
 from essayranking_game_engine import EssayRankingGameEngine
 from wordguessing_game_engine import WordGuessingGameEngine
+from hiddenprofile_game_engine import HiddenProfileGameEngine
 
 
 class GameEngineFactory:
@@ -39,6 +40,8 @@ class GameEngineFactory:
             engine = EssayRankingGameEngine(db_connection_string)
         elif experiment_type == "wordguessing":
             engine = WordGuessingGameEngine(db_connection_string)
+        elif experiment_type == "hiddenprofiles":
+            engine = HiddenProfileGameEngine(db_connection_string)
         else:
             # Default to ShapeFactory for backward compatibility
             engine = GameEngine(db_connection_string)
@@ -50,7 +53,7 @@ class GameEngineFactory:
     @staticmethod
     def get_supported_experiment_types() -> list:
         """Get list of supported experiment types"""
-        return ["shapefactory", "daytrader", "essayranking", "wordguessing"]
+        return ["shapefactory", "daytrader", "essayranking", "wordguessing", "hiddenprofiles"]
     
     @staticmethod
     def is_experiment_type_supported(experiment_type: str) -> bool:

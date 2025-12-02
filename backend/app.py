@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, jsonify, session
+from flask import Flask, render_template, request, redirect, url_for, jsonify, session, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime, timedelta, timezone
@@ -32,12 +32,45 @@ from game_engine_factory import GameEngineFactory
 # Add Human Logger import
 from human_logger import get_human_logger, cleanup_human_logs, stop_human_logging_for_session
 
+# Import MTurk Service
+from mturk_service import mturk_service
+
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Configure Socket.IO with proper error handling
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*",
+    async_mode='threading',  # Use threading mode to avoid async issues
+    logger=False,  # Disable Socket.IO internal logging to reduce noise
+    engineio_logger=False,  # Disable Engine.IO logging
+    ping_timeout=60,
+    ping_interval=25,
+    max_http_buffer_size=1e8  # Increase buffer size for large messages
+)
+
+# Note: Don't add Flask error handlers here as they can interfere with Socket.IO WebSocket connections
+# Socket.IO has its own error handling mechanism
+
+# Add global error handler for Socket.IO
+@socketio.on_error_default
+def default_error_handler(e):
+    """Handle Socket.IO errors gracefully"""
+    try:
+        print(f"❌ Socket.IO error: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            emit('error', {'message': str(e)})
+        except:
+            # If emit fails, just log - don't let it cause another error
+            pass
+    except Exception as handler_error:
+        # If we can't emit an error, just log it
+        print(f"❌ Error in error handler: {handler_error}")
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -219,22 +252,41 @@ def broadcast_timer_update(session_code: str = None):
     """Broadcast current timer state to all connected clients"""
     timer_state = get_timer_state(session_code)
     
-    # Broadcast to all clients (for backward compatibility)
-    socketio.emit('timer_update', {
+    # Get session_started_at from database for accurate time calculation
+    session_started_at = None
+    if session_code:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT session_started_at 
+                FROM sessions 
+                WHERE session_code = %s
+            """, (session_code,))
+            result = cur.fetchone()
+            if result and result.get('session_started_at'):
+                session_started_at = result['session_started_at'].isoformat() if hasattr(result['session_started_at'], 'isoformat') else str(result['session_started_at'])
+            cur.close()
+            return_db_connection(conn)
+        except Exception as e:
+            # Silently fail - use timer_state round_start_time as fallback
+            pass
+    
+    timer_update_data = {
         'experiment_status': timer_state['experiment_status'],
         'time_remaining': timer_state['time_remaining'],
         'round_duration_minutes': timer_state['round_duration_minutes'],
-        'session_code': session_code
-    })
+        'session_code': session_code,
+        'session_started_at': session_started_at or timer_state.get('round_start_time'),
+        'round_start_time': timer_state.get('round_start_time')
+    }
+    
+    # Broadcast to all clients (for backward compatibility)
+    socketio.emit('timer_update', timer_update_data)
     
     # Also broadcast to session-specific rooms if session_code is provided
     if session_code:
-        socketio.emit('timer_update', {
-            'experiment_status': timer_state['experiment_status'],
-            'time_remaining': timer_state['time_remaining'],
-            'round_duration_minutes': timer_state['round_duration_minutes'],
-            'session_code': session_code
-        }, room=f'session_{session_code}')
+        socketio.emit('timer_update', timer_update_data, room=f'session_{session_code}')
 
 def timer_worker(session_code: str = None):
     """Background timer that updates every second for a specific session"""
@@ -418,18 +470,34 @@ def get_db_connection():
 def return_db_connection(conn):
     """Return database connection to pool"""
     global db_pool
-    if db_pool is not None and conn is not None:
+    if conn is None:
+        return
+    
+    # Check if connection is closed
+    try:
+        if conn.closed:
+            return  # Connection already closed, nothing to do
+    except:
+        pass
+    
+    if db_pool is not None:
         try:
+            # Try to return to pool - this will only work if the connection came from the pool
             db_pool.putconn(conn)
+            return
         except Exception as e:
-            print(f"❌ Error returning connection to pool: {e}")
-            # If we can't return to pool, close the connection
+            # Connection might not be from the pool (e.g., fallback direct connection)
+            # or connection might be in a bad state
+            # Just close it instead
             try:
                 conn.close()
             except:
                 pass
+            # Only log if it's not the expected "unkeyed connection" error
+            if "unkeyed" not in str(e).lower():
+                print(f"❌ Error returning connection to pool: {e}")
     else:
-        # If no pool, just close the connection
+        # No pool, just close the connection directly
         try:
             conn.close()
         except:
@@ -480,6 +548,51 @@ def run_migrations():
             else:
                 print("✅ [MIGRATION] trigger_complete_transaction already disabled")
             
+            # Update sessions_experiment_type_check constraint to include 'hiddenprofiles'
+            print("🔧 [MIGRATION] Updating sessions experiment_type constraint to include 'hiddenprofiles'...")
+            try:
+                # Check if constraint already includes hiddenprofiles
+                cur.execute("""
+                    SELECT constraint_name, check_clause 
+                    FROM information_schema.check_constraints 
+                    WHERE constraint_name = 'sessions_experiment_type_check'
+                """)
+                constraint_info = cur.fetchone()
+                
+                if constraint_info:
+                    check_clause = constraint_info[1] if constraint_info else ''
+                    if 'hiddenprofiles' not in check_clause:
+                        # Drop the old constraint
+                        cur.execute("""
+                            ALTER TABLE sessions 
+                            DROP CONSTRAINT IF EXISTS sessions_experiment_type_check
+                        """)
+                        
+                        # Add the new constraint with 'hiddenprofiles'
+                        cur.execute("""
+                            ALTER TABLE sessions 
+                            ADD CONSTRAINT sessions_experiment_type_check 
+                            CHECK (
+                                (experiment_type::text = ANY (ARRAY['shapefactory'::character varying, 'daytrader'::character varying, 'essayranking'::character varying, 'wordguessing'::character varying, 'ecl_custom'::character varying, 'hiddenprofiles'::character varying])) 
+                                OR (experiment_type::text ~~ 'custom_%'::text) 
+                                OR (experiment_type IS NULL)
+                            )
+                        """)
+                        
+                        # Update the constraint comment
+                        cur.execute("""
+                            COMMENT ON CONSTRAINT sessions_experiment_type_check ON sessions IS 'Allows valid experiment types: shapefactory, daytrader, essayranking, wordguessing, ecl_custom, hiddenprofiles, or custom_* (can also be NULL)'
+                        """)
+                        
+                        conn.commit()
+                        print("✅ [MIGRATION] Successfully updated sessions_experiment_type_check constraint")
+                    else:
+                        print("✅ [MIGRATION] sessions_experiment_type_check already includes 'hiddenprofiles'")
+                else:
+                    print("⚠️ [MIGRATION] Could not find sessions_experiment_type_check constraint")
+            except Exception as e:
+                print(f"⚠️ [MIGRATION] Warning: Could not update constraint (may already be updated): {e}")
+            
             cur.close()
         
     except Exception as e:
@@ -508,9 +621,34 @@ def _start_agent_thread(participant_code: str, agent_type: str = None, use_llm: 
     if agent_key in AGENT_THREADS and AGENT_THREADS[agent_key]['thread'].is_alive():
         return False
     
-    # Get the agent perception time window from experiment config
-    agent_perception_time = experiment_config_state.get('agentPerceptionTimeWindow', 10)
-    print(f"Starting agent {participant_code} with interval_seconds={agent_perception_time} (from config)")
+    # Get the agent perception time window from session-specific config
+    # Use session-specific config instead of global state to get the correct interval
+    session_config = get_session_config(session_code) if session_code else experiment_config_state
+    agent_perception_time = session_config.get('agentPerceptionTimeWindow', 15)  # Default to 15 instead of 10
+    print(f"🔧 Agent {participant_code}: Using agentPerceptionTimeWindow={agent_perception_time} from session config")
+    
+    # For Hidden Profiles: Check if agent is active or passive
+    if experiment_type == 'hiddenprofiles':
+        # Get initiative setting for this agent
+        hidden_profiles_config = experiment_config_state.get('hiddenProfiles', {})
+        participant_initiatives = hidden_profiles_config.get('participantInitiatives', {})
+        initiative = participant_initiatives.get(participant_code, 'active')
+        
+        if initiative == 'passive':
+            # Passive agents only respond to messages, not on a timer
+            # Set a very long interval to effectively disable auto-trigger
+            agent_perception_time = 999999  # Very long interval
+            print(f"Starting PASSIVE agent {participant_code} - will only respond to messages (interval={agent_perception_time}s)")
+        else:
+            # Active agents use the configured perception window with ±2 second randomization
+            # to avoid multiple agents sending messages at the same time
+            base_interval = agent_perception_time
+            random_offset = random.choice([-2, -1, 1, 2])  # Random integer offset from [-2, -1, 0, 1, 2] seconds
+            agent_perception_time = max(1.0, base_interval + random_offset)  # Ensure minimum 1 second
+            print(f"Starting ACTIVE agent {participant_code} with interval_seconds={agent_perception_time:.2f} (base={base_interval}s, randomized ±1s)")
+    else:
+        print(f"Starting agent {participant_code} with interval_seconds={agent_perception_time} (from config)")
+    
     print(f"Memory management: use_memory={use_memory}, max_memory_length={max_memory_length}")
     
     stop_event = threading.Event()
@@ -573,6 +711,152 @@ def _stop_agent_thread(participant_code: str, session_code: str = None) -> bool:
         AGENT_THREADS.pop(agent_key, None)
     return True
 
+def _trigger_passive_agent(participant_code: str, session_code: str = None):
+    """Trigger a passive agent to run a single perception cycle (for Hidden Profiles)"""
+    try:
+        agent_key = f"{session_code}:{participant_code}" if session_code else participant_code
+        print(f"[PASSIVE TRIGGER] Looking for agent with key: {agent_key}")
+        print(f"[PASSIVE TRIGGER] Available agent keys: {list(AGENT_THREADS.keys())}")
+        
+        info = AGENT_THREADS.get(agent_key)
+        
+        if not info:
+            print(f"[PASSIVE TRIGGER] Agent {agent_key} not found in AGENT_THREADS")
+            return False
+        
+        if not info.get('thread') or not info['thread'].is_alive():
+            print(f"[PASSIVE TRIGGER] Agent {agent_key} thread is not alive")
+            return False
+        
+        controller = info.get('controller')
+        if not controller:
+            print(f"[PASSIVE TRIGGER] Agent {agent_key} has no controller")
+            return False
+        
+        print(f"[PASSIVE TRIGGER] Successfully found agent {agent_key}, triggering cycle...")
+        
+        # Run a single cycle asynchronously in a new thread to avoid blocking
+        def _run_cycle():
+            try:
+                asyncio.run(controller.run_single_cycle())
+                print(f"[PASSIVE TRIGGER] Completed cycle for agent {participant_code}")
+            except Exception as e:
+                print(f"[PASSIVE TRIGGER ERROR] Error triggering passive agent {participant_code}: {e}")
+                import traceback
+                print(traceback.format_exc())
+        
+        trigger_thread = threading.Thread(target=_run_cycle, daemon=True)
+        trigger_thread.start()
+        print(f"[PASSIVE TRIGGER] Started trigger thread for agent {participant_code}")
+        return True
+    except Exception as e:
+        print(f"[PASSIVE TRIGGER ERROR] Error in _trigger_passive_agent: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return False
+
+def _trigger_all_agents_in_session(session_code: str):
+    """Trigger all agents (both active and passive) in a session to run a cycle immediately"""
+    try:
+        triggered_count = 0
+        for agent_key, info in AGENT_THREADS.items():
+            # Check if this agent belongs to the session
+            if session_code and not agent_key.startswith(f"{session_code}:"):
+                continue
+            
+            if not info or not info.get('thread') or not info['thread'].is_alive():
+                continue
+            
+            controller = info.get('controller')
+            if not controller:
+                continue
+            
+            participant_code = info.get('participant_code')
+            if not participant_code:
+                continue
+            
+            # Trigger the agent (works for both active and passive)
+            def _run_cycle():
+                try:
+                    asyncio.run(controller.run_single_cycle())
+                except Exception as e:
+                    print(f"Error triggering agent {participant_code}: {e}")
+            
+            trigger_thread = threading.Thread(target=_run_cycle, daemon=True)
+            trigger_thread.start()
+            triggered_count += 1
+        
+        if triggered_count > 0:
+            print(f"Triggered {triggered_count} agent(s) in session {session_code} for reading phase completion check")
+        return triggered_count
+    except Exception as e:
+        print(f"Error in _trigger_all_agents_in_session: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return 0
+
+def _check_and_trigger_agents_for_reading_phase(session_code: str):
+    """Check if reading phase is complete for all participants and trigger agents if so"""
+    try:
+        with DatabaseConnection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            # Get session config
+            cur.execute("""
+                SELECT experiment_config FROM sessions WHERE session_code = %s
+            """, (session_code,))
+            session_result = cur.fetchone()
+            
+            if not session_result:
+                return False
+            
+            experiment_config = session_result['experiment_config'] or {}
+            hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+            
+            # Check if public info exists
+            public_info = hidden_profiles_config.get('publicInfo')
+            has_public_info = public_info is not None and public_info != ""
+            
+            if not has_public_info:
+                return False
+            
+            # Get all participants in the session
+            cur.execute("""
+                SELECT participant_code FROM participants 
+                WHERE session_code = %s
+            """, (session_code,))
+            participants = cur.fetchall()
+            
+            if not participants:
+                return False
+            
+            # Check if all participants have candidate documents assigned
+            participant_candidate_docs = hidden_profiles_config.get('participantCandidateDocs', {})
+            all_have_docs = True
+            
+            for participant in participants:
+                participant_code = participant['participant_code']
+                # Remove session suffix for lookup
+                base_code = participant_code.rsplit('_', 1)[0] if '_' in participant_code else participant_code
+                
+                if base_code not in participant_candidate_docs:
+                    all_have_docs = False
+                    break
+            
+            if all_have_docs:
+                # Reading phase is complete - trigger all agents
+                print(f"Reading phase complete for session {session_code} - triggering all agents")
+                _trigger_all_agents_in_session(session_code)
+                return True
+            
+            return False
+            
+    except Exception as e:
+        print(f"Error checking reading phase completion: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return False
+
 def activate_agents_for_session(session_code: str, use_llm: bool = True, llm_model: str = 'gpt-4o-mini', 
                                use_memory: bool = True, max_memory_length: int = 20) -> dict:
     try:
@@ -624,15 +908,63 @@ def deactivate_agents_for_session(session_code: str) -> dict:
             WHERE session_code = %s AND is_agent = true
         """, (session_code,))
         session_agents = {row[0] for row in cur.fetchall()}
-        cur.close(); conn.close()
+        
+        # For Hidden Profiles: Clean up participantInitiatives from experiment_config
+        cur.execute("""
+            SELECT experiment_type, experiment_config 
+            FROM sessions 
+            WHERE session_code = %s
+        """, (session_code,))
+        session_row = cur.fetchone()
+        if session_row and session_row['experiment_type'] == 'hiddenprofiles':
+            experiment_config = session_row['experiment_config'] or {}
+            if 'hiddenProfiles' in experiment_config and 'participantInitiatives' in experiment_config['hiddenProfiles']:
+                # Remove initiatives for agents being deactivated
+                for agent_code in session_agents:
+                    experiment_config['hiddenProfiles']['participantInitiatives'].pop(agent_code, None)
+                    # Also try without session suffix
+                    base_code = agent_code.rsplit('_', 1)[0] if '_' in agent_code else agent_code
+                    experiment_config['hiddenProfiles']['participantInitiatives'].pop(base_code, None)
+                
+                # Update experiment_config
+                cur.execute("""
+                    UPDATE sessions 
+                    SET experiment_config = %s 
+                    WHERE session_code = %s
+                """, (json.dumps(experiment_config), session_code))
+                conn.commit()
+                print(f"🧹 Cleaned up participantInitiatives for deactivated agents in session {session_code}")
+        
+        cur.close()
+        return_db_connection(conn)
         stopped = 0
         for agent_key in list(AGENT_THREADS.keys()):
             info = AGENT_THREADS.get(agent_key)
             if info and info.get('session_code') == session_code:
-                # Add final log entry before stopping the agent
+                # For Hidden Profiles: Ensure agent submits final vote before deactivation
                 if info.get('controller'):
                     try:
                         controller = info['controller']
+                        # Check if this is a Hidden Profiles experiment
+                        if controller.experiment_type == "hiddenprofiles":
+                            # Check if agent has voted
+                            has_voted = controller._has_voted(controller.participant_code, session_code)
+                            if not has_voted:
+                                print(f"[FINAL VOTE] Agent {info.get('participant_code')} has not voted - triggering final vote before deactivation")
+                                try:
+                                    # Trigger a final vote cycle
+                                    import asyncio
+                                    state = asyncio.run(controller.perceive())
+                                    tool_calls = asyncio.run(controller.decide(state))
+                                    if tool_calls:
+                                        asyncio.run(controller.act(tool_calls))
+                                        print(f"[FINAL VOTE] Final vote submitted for agent {info.get('participant_code')}")
+                                    else:
+                                        print(f"[FINAL VOTE WARNING] Agent {info.get('participant_code')} did not generate vote action")
+                                except Exception as vote_error:
+                                    print(f"[FINAL VOTE ERROR] Failed to trigger final vote for agent {info.get('participant_code')}: {vote_error}")
+                        
+                        # Add final log entry before stopping the agent
                         controller._log(f"Session {session_code} ended - agent logging stopped")
                         controller._log_llm("SESSION_END", f"Session {session_code} ended - LLM logging stopped")
                         controller._log_memory("SESSION_END", f"Session {session_code} ended - memory logging stopped")
@@ -715,13 +1047,16 @@ def cleanup_all_logs():
 
 def get_agents_status(session_code: str) -> dict:
     try:
-        conn = get_db_connection(); cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT participant_code, agent_type, is_agent
             FROM participants 
             WHERE session_code = %s AND is_agent = true
         """, (session_code,))
-        agents = cur.fetchall(); cur.close(); conn.close()
+        agents = cur.fetchall()
+        cur.close()
+        return_db_connection(conn)
         active = {}
         for a in agents:
             code = a['participant_code']
@@ -776,6 +1111,14 @@ def health():
 def hello():
     return jsonify({"message": "Hello from Shape Factory Backend!"})
 
+@app.route('/api/check-api-keys')
+def check_api_keys():
+    """Check if API keys are present"""
+    openai_key = os.getenv("OPENAI_API_KEY")
+    claude_key = os.getenv("CLAUDE_API_KEY")
+    keys_present = bool(openai_key or claude_key)
+    return jsonify({"keys_present": keys_present})
+
 @app.route('/api/data')
 def get_data():
     """Get basic data for testing"""
@@ -792,7 +1135,7 @@ def get_data():
         participant_count = cur.fetchone()[0]
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return jsonify({
             "session": session_data,
@@ -839,11 +1182,25 @@ def api_cleanup_all_logs():
 
 @socketio.on('connect')
 def handle_connect():
-    print(f"Client connected: {request.sid}")
+    """Handle client connection with error handling"""
+    try:
+        print(f"Client connected: {request.sid}")
+        return True
+    except Exception as e:
+        print(f"❌ Error during client connection: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print(f"Client disconnected: {request.sid}")
+    """Handle client disconnection with error handling"""
+    try:
+        print(f"Client disconnected: {request.sid}")
+    except Exception as e:
+        print(f"❌ Error during client disconnection: {e}")
+        import traceback
+        traceback.print_exc()
 
 @socketio.on('register_researcher')
 def handle_researcher_register(data):
@@ -948,7 +1305,7 @@ def handle_participant_heartbeat(data):
             
             conn.commit()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             
     except Exception as e:
         print(f"Error updating participant heartbeat: {e}")
@@ -1044,13 +1401,28 @@ def experiment_config_api():
                 current_session_config['experimentInterfaceConfig'] = data['experimentInterfaceConfig']
                 print(f"🔧 Updated experiment interface config: {data['experimentInterfaceConfig']}")
             
+            # Handle hiddenProfiles nested configuration
+            if 'hiddenProfiles' in data and isinstance(data['hiddenProfiles'], dict):
+                if 'hiddenProfiles' not in current_session_config:
+                    current_session_config['hiddenProfiles'] = {}
+                # Merge the hiddenProfiles config (don't replace entirely, merge to preserve other fields)
+                current_session_config['hiddenProfiles'].update(data['hiddenProfiles'])
+                print(f"🔧 Updated hiddenProfiles config: {data['hiddenProfiles']}")
+            
             # Set sessionId in the config
             current_session_config['sessionId'] = session_code
             
             # Tie timer to sessionDuration (since we're only using session time now, no rounds)
-            if 'sessionDuration' in data:
-                get_timer_state(session_code)['round_duration_minutes'] = int(current_session_config['sessionDuration'])
-                get_timer_state(session_code)['time_remaining'] = get_timer_state(session_code)['round_duration_minutes'] * 60
+            if 'sessionDuration' in data and data['sessionDuration'] is not None:
+                try:
+                    session_duration = int(data['sessionDuration'])
+                    timer_state = get_timer_state(session_code)
+                    timer_state['round_duration_minutes'] = session_duration
+                    timer_state['time_remaining'] = session_duration * 60
+                    print(f"✅ Timer state updated: sessionDuration={session_duration} minutes")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid sessionDuration value: {data['sessionDuration']}, error: {e}")
+                    # Don't fail the entire request, just log the warning
             
             # Restart agents if agentPerceptionTimeWindow or awarenessDashboard changed
             if (agent_perception_changed or awareness_dashboard_changed):
@@ -1070,20 +1442,47 @@ def experiment_config_api():
                 session_exists = cur.fetchone()
                 
                 if session_exists:
-                    cur.execute("""
-                        UPDATE sessions 
-                        SET experiment_config = %s
-                        WHERE session_code = %s
-                    """, (json.dumps(current_session_config), session_code))
-                    conn.commit()
-                    print(f"✅ Configuration updated for session {session_code}")
+                    try:
+                        # Serialize config to JSON, handling any non-serializable objects
+                        config_json = json.dumps(current_session_config, default=str)
+                        cur.execute("""
+                            UPDATE sessions 
+                            SET experiment_config = %s
+                            WHERE session_code = %s
+                        """, (config_json, session_code))
+                        conn.commit()
+                        print(f"✅ Configuration updated for session {session_code}")
+                    except (TypeError, ValueError) as json_error:
+                        logger.error(f"Error serializing experiment_config to JSON: {json_error}")
+                        logger.error(f"Config keys: {list(current_session_config.keys())}")
+                        # Try to identify problematic fields
+                        for key, value in current_session_config.items():
+                            try:
+                                json.dumps(value, default=str)
+                            except Exception as e:
+                                logger.error(f"Problematic field '{key}': {e}")
+                        raise
                     
                     # Broadcast configuration changes to all connected clients
-                    socketio.emit('config_updated', {
-                        'communicationLevel': current_session_config.get('communicationLevel', 'chat'),
-                        'awarenessDashboard': current_session_config.get('awarenessDashboard', 'off'),
-                        'session_code': session_code
-                    }, room=f'session_{session_code}')
+                    try:
+                        socketio.emit('config_updated', {
+                            'communicationLevel': current_session_config.get('communicationLevel', 'chat'),
+                            'awarenessDashboard': current_session_config.get('awarenessDashboard', 'off'),
+                            'sessionDuration': current_session_config.get('sessionDuration'),
+                            'hiddenProfiles': current_session_config.get('hiddenProfiles'),
+                            'session_code': session_code
+                        }, room=f'session_{session_code}')
+                        
+                        # Also emit a full experiment_config update for participants
+                        # Make sure config is JSON-serializable for WebSocket
+                        config_for_ws = json.loads(json.dumps(current_session_config, default=str))
+                        socketio.emit('experiment_config_updated', {
+                            'session_code': session_code,
+                            'config': config_for_ws
+                        }, room=f'session_{session_code}')
+                    except Exception as emit_error:
+                        logger.warning(f"Error broadcasting config update: {emit_error}")
+                        # Don't fail the request if broadcasting fails
                     
                     print(f"✅ Configuration broadcasted for session {session_code}")
                 else:
@@ -1097,7 +1496,13 @@ def experiment_config_api():
                 'agents_restarted': agent_perception_changed or awareness_dashboard_changed
             })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in experiment_config_api: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
 
 @app.route('/api/interaction/config', methods=['POST'])
 def interaction_config_api():
@@ -1738,7 +2143,7 @@ def update_session_experiment_type():
             }), 400
         
         # Validate experiment type (only allow valid experiment types)
-        valid_experiment_types = ['shapefactory', 'daytrader', 'essayranking', 'wordguessing']
+        valid_experiment_types = ['shapefactory', 'daytrader', 'essayranking', 'wordguessing', 'hiddenprofiles']
         if not experiment_type.startswith('custom_') and experiment_type not in valid_experiment_types:
             return jsonify({
                 'success': False,
@@ -1800,6 +2205,8 @@ def update_session_experiment_type():
 @app.route('/api/sessions/delete', methods=['DELETE'])
 def delete_session():
     """Delete a session and all its associated data"""
+    conn = None
+    cur = None
     try:
         data = request.get_json() or {}
         session_code = data.get('session_code')
@@ -1811,7 +2218,7 @@ def delete_session():
             }), 400
         
         conn = get_db_connection()
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         
         # Check if session exists
         cur.execute("""
@@ -1822,7 +2229,7 @@ def delete_session():
         session_result = cur.fetchone()
         if not session_result:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({
                 'success': False,
                 'error': 'Session not found'
@@ -1842,12 +2249,27 @@ def delete_session():
         messages_deleted = cur.rowcount
         print(f"🗑️ Deleted {messages_deleted} messages for session {session_code}")
         
-        # 3. Delete participants for this session
-        cur.execute("DELETE FROM participants WHERE session_id = %s", (session_id,))
-        participants_deleted = cur.rowcount
-        print(f"🗑️ Deleted {participants_deleted} participants for session {session_code}")
+        # 3. Delete investments (for DayTrader experiments)
+        cur.execute("DELETE FROM investments WHERE session_id = %s", (session_id,))
+        investments_deleted = cur.rowcount
+        print(f"🗑️ Deleted {investments_deleted} investments for session {session_code}")
         
-        # 4. Delete production queue entries for this session
+        # 4. Delete essay assignments (for EssayRanking experiments)
+        cur.execute("DELETE FROM essay_assignments WHERE session_id = %s", (session_id,))
+        essays_deleted = cur.rowcount
+        print(f"🗑️ Deleted {essays_deleted} essay assignments for session {session_code}")
+        
+        # 5. Delete ranking submissions (for EssayRanking experiments)
+        cur.execute("DELETE FROM ranking_submissions WHERE session_id = %s", (session_id,))
+        rankings_deleted = cur.rowcount
+        print(f"🗑️ Deleted {rankings_deleted} ranking submissions for session {session_code}")
+        
+        # 6. Delete wordguessing chat history (for WordGuessing experiments)
+        cur.execute("DELETE FROM wordguessing_chat_history WHERE session_id = %s", (session_id,))
+        chat_deleted = cur.rowcount
+        print(f"🗑️ Deleted {chat_deleted} wordguessing chat history entries for session {session_code}")
+        
+        # 7. Delete production queue entries for this session (before deleting participants)
         cur.execute("""
             DELETE FROM production_queue 
             WHERE participant_id IN (
@@ -1857,44 +2279,104 @@ def delete_session():
         production_deleted = cur.rowcount
         print(f"🗑️ Deleted {production_deleted} production queue entries for session {session_code}")
         
-        # 5. Delete shape inventory for this session
+        # 8. Delete participants for this session
+        # For Hidden Profiles: Clean up participantInitiatives from experiment_config before deleting participants
+        cur.execute("SELECT experiment_type, experiment_config FROM sessions WHERE session_id = %s", (session_id,))
+        session_row = cur.fetchone()
+        if session_row and session_row['experiment_type'] == 'hiddenprofiles':
+            experiment_config = session_row['experiment_config'] or {}
+            if 'hiddenProfiles' in experiment_config:
+                # Get all participant codes that will be deleted
+                cur.execute("SELECT participant_code FROM participants WHERE session_id = %s", (session_id,))
+                participant_codes = [row['participant_code'] for row in cur.fetchall()]
+                
+                # Clean up participantInitiatives, participantCandidateDocs, and votes
+                if 'participantInitiatives' in experiment_config['hiddenProfiles']:
+                    for code in participant_codes:
+                        experiment_config['hiddenProfiles']['participantInitiatives'].pop(code, None)
+                        # Also try without session suffix
+                        base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                        experiment_config['hiddenProfiles']['participantInitiatives'].pop(base_code, None)
+                
+                if 'participantCandidateDocs' in experiment_config['hiddenProfiles']:
+                    for code in participant_codes:
+                        experiment_config['hiddenProfiles']['participantCandidateDocs'].pop(code, None)
+                        base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                        experiment_config['hiddenProfiles']['participantCandidateDocs'].pop(base_code, None)
+                
+                if 'votes' in experiment_config['hiddenProfiles']:
+                    for code in participant_codes:
+                        experiment_config['hiddenProfiles']['votes'].pop(code, None)
+                        base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                        experiment_config['hiddenProfiles']['votes'].pop(base_code, None)
+                
+                # Update experiment_config
+                cur.execute("""
+                    UPDATE sessions 
+                    SET experiment_config = %s 
+                    WHERE session_id = %s
+                """, (json.dumps(experiment_config), session_id))
+                print(f"🧹 Cleaned up Hidden Profiles participant data from experiment_config for session {session_code}")
+        
+        # 9. Delete participant status log (before deleting participants to avoid any constraint issues)
+        try:
+            cur.execute("DELETE FROM participant_status_log WHERE session_id = %s", (session_id,))
+            status_log_deleted = cur.rowcount
+            print(f"🗑️ Deleted {status_log_deleted} participant status log entries for session {session_code}")
+        except Exception as e:
+            print(f"⚠️ Warning: Could not delete participant_status_log (may not exist or already deleted): {str(e)}")
+            # Continue with deletion - this is not critical
+        
+        cur.execute("DELETE FROM participants WHERE session_id = %s", (session_id,))
+        participants_deleted = cur.rowcount
+        print(f"🗑️ Deleted {participants_deleted} participants for session {session_code}")
+        
+        # 10. Delete shape inventory for this session
         cur.execute("DELETE FROM shape_inventory WHERE session_id = %s", (session_id,))
         inventory_deleted = cur.rowcount
         print(f"🗑️ Deleted {inventory_deleted} shape inventory entries for session {session_code}")
         
-        # 6. Delete participant orders for this session
+        # 11. Delete participant orders for this session
         cur.execute("DELETE FROM participant_orders WHERE session_id = %s", (session_id,))
         orders_deleted = cur.rowcount
         print(f"🗑️ Deleted {orders_deleted} participant orders for session {session_code}")
         
-        # 7. Delete AI agent logs for this session
+        # 12. Delete AI agent logs for this session
         cur.execute("DELETE FROM ai_agent_logs WHERE session_id = %s", (session_id,))
         logs_deleted = cur.rowcount
         print(f"🗑️ Deleted {logs_deleted} AI agent logs for session {session_code}")
         
-        # 8. Delete session analytics for this session
+        # 13. Delete session analytics for this session
         cur.execute("DELETE FROM session_analytics WHERE session_id = %s", (session_id,))
         analytics_deleted = cur.rowcount
         print(f"🗑️ Deleted {analytics_deleted} session analytics for session {session_code}")
         
-        # 9. Delete dashboard notifications for this session
+        # 14. Delete dashboard notifications for this session
         cur.execute("DELETE FROM dashboard_notifications WHERE session_id = %s", (session_id,))
         notifications_deleted = cur.rowcount
         print(f"🗑️ Deleted {notifications_deleted} dashboard notifications for session {session_code}")
         
-        # 10. Delete session metrics realtime for this session
+        # 15. Delete session metrics realtime for this session
         cur.execute("DELETE FROM session_metrics_realtime WHERE session_id = %s", (session_id,))
         metrics_deleted = cur.rowcount
         print(f"🗑️ Deleted {metrics_deleted} session metrics for session {session_code}")
         
-        # 11. Finally delete the session itself
+        # 16. Delete research observations for this session
+        cur.execute("DELETE FROM research_observations WHERE session_id = %s", (session_id,))
+        observations_deleted = cur.rowcount
+        print(f"🗑️ Deleted {observations_deleted} research observations for session {session_code}")
+        
+        # 17. Finally delete the session itself
         cur.execute("DELETE FROM sessions WHERE session_id = %s", (session_id,))
         session_deleted = cur.rowcount
         print(f"🗑️ Deleted {session_deleted} session: {session_code}")
         
+        if session_deleted == 0:
+            raise Exception(f"Failed to delete session {session_code}: Session not found or already deleted")
+        
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         print(f"🗑️ Session {session_code} and all associated data deleted")
         
@@ -1904,9 +2386,57 @@ def delete_session():
         })
         
     except Exception as e:
+        # Get more detailed error information
+        error_details = str(e)
+        error_type = type(e).__name__
+        
+        # Try to get PostgreSQL error details if available
+        if hasattr(e, 'pgcode'):
+            error_details = f"PostgreSQL Error [{e.pgcode}]: {e.pgerror or str(e)}"
+        elif hasattr(e, 'args') and len(e.args) > 0:
+            if isinstance(e.args[0], (int, float)):
+                error_details = f"{error_type}: {e.args[0]}"
+            else:
+                error_details = f"{error_type}: {str(e)}"
+        else:
+            error_details = f"{error_type}: {str(e)}"
+        
+        # Rollback transaction on error
+        if conn:
+            try:
+                conn.rollback()
+                print(f"⚠️ Rolled back transaction due to error: {error_details}")
+            except Exception as rollback_error:
+                print(f"⚠️ Error during rollback: {str(rollback_error)}")
+        
+        # Close cursor and connection
+        if cur:
+            try:
+                cur.close()
+            except:
+                pass
+        if conn:
+            try:
+                return_db_connection(conn)
+            except:
+                pass
+        
+        session_code_for_error = 'unknown'
+        try:
+            if 'data' in locals() and data:
+                session_code_for_error = data.get('session_code', 'unknown')
+            elif 'session_code' in locals():
+                session_code_for_error = session_code
+        except:
+            pass
+        
+        print(f"❌ Failed to delete session {session_code_for_error}: {error_details}")
+        import traceback
+        print(f"❌ Full traceback: {traceback.format_exc()}")
+        
         return jsonify({
             'success': False,
-            'error': f'Failed to delete session: {str(e)}'
+            'error': f'Failed to delete session: {error_details}'
         }), 500
 
 @app.route('/api/sessions/check', methods=['POST'])
@@ -1971,21 +2501,29 @@ def check_session():
 
 @app.route('/api/session/current', methods=['GET'])
 def get_current_session():
-    """Get current session information for authenticated participant"""
+    """Get current session information for authenticated participant or researcher"""
     try:
-        # Get token from Authorization header
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'Authorization token required'}), 401
+        session_code = None
         
-        token = auth_header.split(' ')[1]
-        
-        # Decode token
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        session_code = payload.get('session_code')
+        # Try to get session_code from query parameter (for researcher dashboard)
+        session_code_param = request.args.get('session_code')
+        if session_code_param:
+            session_code = session_code_param
+        else:
+            # Try to get from Authorization header (for authenticated participants)
+            auth_header = request.headers.get('Authorization')
+            if auth_header and auth_header.startswith('Bearer '):
+                token = auth_header.split(' ')[1]
+                try:
+                    # Decode token
+                    payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+                    session_code = payload.get('session_code')
+                except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+                    # If token is invalid, fall through to check query param
+                    pass
         
         if not session_code:
-            return jsonify({'error': 'Session code not found in token'}), 400
+            return jsonify({'error': 'Session code required (either as query parameter or in auth token)'}), 400
         
         with DatabaseConnection() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2011,10 +2549,6 @@ def get_current_session():
         else:
             return jsonify({'error': 'Session not found'}), 404
             
-    except jwt.ExpiredSignatureError:
-        return jsonify({'error': 'Token expired'}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({'error': 'Invalid token'}), 401
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2140,7 +2674,7 @@ def save_session_template():
         if 'cur' in locals():
             cur.close()
         if 'conn' in locals():
-            conn.close()
+            return_db_connection(conn)
 
 @app.route('/api/session-templates/<session_id>', methods=['GET'])
 def get_session_template(session_id):
@@ -2165,7 +2699,7 @@ def get_session_template(session_id):
         
         template = cur.fetchone()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         if not template:
             return jsonify({
@@ -2201,7 +2735,7 @@ def load_session_template(session_id):
         
         template = cur.fetchone()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         if not template:
             return jsonify({
@@ -2244,7 +2778,7 @@ def delete_session_template(session_id):
         
         if not template:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({
                 'success': False,
                 'error': 'Session template not found'
@@ -2255,7 +2789,7 @@ def delete_session_template(session_id):
         # Prevent deletion of default templates
         if is_default:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({
                 'success': False,
                 'error': 'Cannot delete default session templates'
@@ -2269,7 +2803,7 @@ def delete_session_template(session_id):
         
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return jsonify({
             'success': True,
@@ -2301,47 +2835,119 @@ def start_experiment():
         # Get session configuration for this specific session
         session_config = get_session_config(session_code)
         session_duration = session_config.get('sessionDuration', 15)
+        experiment_type = session_config.get('experiment_type', 'shapefactory')
         
-        # Initialize timer state for this session
-        initialize_timer_state(session_code)
-        timer_state = get_timer_state(session_code)
+        from datetime import datetime, timezone
+        session_start_time = datetime.now(timezone.utc)
         
-        # Update experiment status
-        timer_state['experiment_status'] = 'running'
-        timer_state['round_duration_minutes'] = session_duration
-        timer_state['time_remaining'] = session_duration * 60
-        timer_state['timer_active'] = True  # Make sure timer is marked as active
-        
-        print(f"🔧 Timer state after initialization: {timer_state}")
-        print(f"🔧 Timer active flag: {timer_state.get('timer_active', False)}")
-        
-        print(f"✅ Timer state updated after start: {timer_state}")
-        
-        # Start session-specific timer
-        start_session_timer(session_code)
-        print(f"✅ Session timer started for session: {session_code}")
-        
-        # Immediately broadcast timer update to all clients
-        broadcast_timer_update(session_code)
-        print("✅ Timer state broadcasted to all clients")
-        
-        # Broadcast specific experiment_started event for researcher dashboard
-        socketio.emit('experiment_started', {
-            'experiment_status': 'running',
-            'session_code': session_code,
-            'timer_state': timer_state
-        }, room=f'session_{session_code}')
-        socketio.emit('experiment_started', {
-            'experiment_status': 'running',
-            'session_code': session_code,
-            'timer_state': timer_state
-        }, room='researcher')
-        socketio.emit('experiment_started', {
-            'experiment_status': 'running',
-            'session_code': session_code,
-            'timer_state': timer_state
-        })
-        print("✅ Experiment started event broadcasted to all clients")
+        # For hiddenprofiles, also call start_session to ensure consistency
+        if experiment_type == 'hiddenprofiles':
+            # For hiddenprofiles, do NOT set session_started_at here - it will be set when the human submits their first vote
+            # Just update the session status to active (but don't set session_started_at yet)
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE sessions 
+                    SET session_status = 'session_active'
+                    WHERE session_code = %s
+                """, (session_code,))
+                conn.commit()
+                cur.close()
+                return_db_connection(conn)
+                print(f"✅ Hidden Profiles: Session status set to active (session_started_at will be set when human submits first vote)")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not update session status: {e}")
+            try:
+                game_engine = get_game_engine(experiment_type)
+                start_result = game_engine.start_session(session_code)
+                if start_result.get('success'):
+                    print(f"✅ Hidden Profiles session started: {start_result.get('session_code')}")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not start hiddenprofiles session: {e}")
+            
+            # For hiddenprofiles, do NOT start the timer here - it will start when the human submits their first vote
+            # Initialize timer state but keep it in 'idle' or 'waiting' status
+            initialize_timer_state(session_code)
+            timer_state = get_timer_state(session_code)
+            
+            # Set timer state to waiting - timer will start when human submits first vote
+            timer_state['experiment_status'] = 'waiting'  # Changed from 'running' to 'waiting'
+            timer_state['round_duration_minutes'] = session_duration
+            timer_state['time_remaining'] = session_duration * 60
+            timer_state['timer_active'] = False  # Do not activate timer yet
+            timer_state['round_start_time'] = None  # Will be set when vote is submitted
+            
+            print(f"⏸️ Hidden Profiles: Timer initialized but NOT started. Will start when human submits first vote.")
+            print(f"🔧 Timer state: {timer_state}")
+            
+            # Broadcast timer update (with waiting status)
+            broadcast_timer_update(session_code)
+            
+            # Don't broadcast experiment_started event for hiddenprofiles here
+            # It will be broadcast when the vote is submitted
+        else:
+            # For non-hiddenprofiles experiments, set session_started_at here
+            # Set session_started_at in database BEFORE starting timer to ensure synchronization
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE sessions 
+                    SET session_status = 'session_active',
+                        session_started_at = %s
+                    WHERE session_code = %s
+                """, (session_start_time, session_code))
+                conn.commit()
+                cur.close()
+                return_db_connection(conn)
+                print(f"✅ Set session_started_at to {session_start_time.isoformat()} for session {session_code}")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not set session_started_at: {e}")
+                # Continue anyway - timer will still work
+            # For other experiment types, start timer immediately
+            # Initialize timer state for this session
+            initialize_timer_state(session_code)
+            timer_state = get_timer_state(session_code)
+            
+            # Update experiment status
+            timer_state['experiment_status'] = 'running'
+            timer_state['round_duration_minutes'] = session_duration
+            timer_state['time_remaining'] = session_duration * 60
+            timer_state['timer_active'] = True  # Make sure timer is marked as active
+            timer_state['round_start_time'] = session_start_time.isoformat()  # Store start time for synchronization
+            
+            print(f"🔧 Timer state after initialization: {timer_state}")
+            print(f"🔧 Timer active flag: {timer_state.get('timer_active', False)}")
+            print(f"🔧 Round start time: {timer_state.get('round_start_time')}")
+            
+            print(f"✅ Timer state updated after start: {timer_state}")
+            
+            # Start session-specific timer
+            start_session_timer(session_code)
+            print(f"✅ Session timer started for session: {session_code}")
+            
+            # Immediately broadcast timer update to all clients
+            broadcast_timer_update(session_code)
+            print("✅ Timer state broadcasted to all clients")
+            
+            # Broadcast specific experiment_started event for researcher dashboard
+            socketio.emit('experiment_started', {
+                'experiment_status': 'running',
+                'session_code': session_code,
+                'timer_state': timer_state
+            }, room=f'session_{session_code}')
+            socketio.emit('experiment_started', {
+                'experiment_status': 'running',
+                'session_code': session_code,
+                'timer_state': timer_state
+            }, room='researcher')
+            socketio.emit('experiment_started', {
+                'experiment_status': 'running',
+                'session_code': session_code,
+                'timer_state': timer_state
+            })
+            print("✅ Experiment started event broadcasted to all clients")
         
         # Simple approach: just update participant money
         try:
@@ -2362,7 +2968,7 @@ def start_experiment():
             updated_count = cur.rowcount
             conn.commit()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             
             print(f"✅ Updated {updated_count} participants with ${starting_money} from session config")
             
@@ -2371,50 +2977,57 @@ def start_experiment():
             # Continue anyway - the experiment can still start
         
         # Auto-activate agents if configured
-        try:
-            conn = get_db_connection()
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            
-            # Get AI agents
-            cur.execute("""
-                SELECT participant_code 
-                FROM participants 
-                WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s) 
-                AND participant_type = 'ai_agent'
-            """, (session_code,))
-            
-            agents = cur.fetchall()
-            cur.close()
-            conn.close()
+        # For Hidden Profiles: agents should only start after human submits initial vote
+        # Skip agent activation here for hiddenprofiles experiments
+        experiment_type = session_config.get('experiment_type', 'shapefactory')
+        
+        if experiment_type != 'hiddenprofiles':
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                
+                # Get AI agents
+                cur.execute("""
+                    SELECT participant_code 
+                    FROM participants 
+                    WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s) 
+                    AND participant_type = 'ai_agent'
+                """, (session_code,))
+                
+                agents = cur.fetchall()
+                cur.close()
+                return_db_connection(conn)
 
-            for agent in agents:
-                try:
-                    conn = get_db_connection()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE participants 
-                        SET login_status = 'active', last_activity = %s
-                        WHERE participant_code = %s AND session_id = (SELECT session_id FROM sessions WHERE session_code = %s)
-                    """, (datetime.now(timezone.utc), agent['participant_code'], session_code))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    print(f"✅ Agent {agent['participant_code']} marked active")
-                except Exception as e:
-                    print(f"❌ Error marking agent {agent['participant_code']} active: {e}")
+                for agent in agents:
+                    try:
+                        conn = get_db_connection()
+                        cur = conn.cursor()
+                        cur.execute("""
+                            UPDATE participants 
+                            SET login_status = 'active', last_activity = %s
+                            WHERE participant_code = %s AND session_id = (SELECT session_id FROM sessions WHERE session_code = %s)
+                        """, (datetime.now(timezone.utc), agent['participant_code'], session_code))
+                        conn.commit()
+                        cur.close()
+                        return_db_connection(conn)
+                        print(f"✅ Agent {agent['participant_code']} marked active")
+                    except Exception as e:
+                        print(f"❌ Error marking agent {agent['participant_code']} active: {e}")
 
-            # Start agent loops locally
-            print("🚀 Starting local agent loops...")
-            # Double-check that experiment status is set to running before activating agents
-            session_timer_state = get_timer_state(session_code)
-            if session_timer_state['experiment_status'] == 'running':
-                activation_result = activate_agents_for_session(session_code, use_memory=True)
-                print(f"Local activation result: {activation_result}")
-            else:
-                print(f"⚠️ Warning: Experiment status is '{session_timer_state['experiment_status']}', not 'running'. Skipping agent activation.")
-                activation_result = {'success': False, 'error': 'Experiment not in running state'}
-        except Exception as e:
-            print(f"Error auto-activating agents: {e}")
+                # Start agent loops locally
+                print("🚀 Starting local agent loops...")
+                # Double-check that experiment status is set to running before activating agents
+                session_timer_state = get_timer_state(session_code)
+                if session_timer_state['experiment_status'] == 'running':
+                    activation_result = activate_agents_for_session(session_code, use_memory=True)
+                    print(f"Local activation result: {activation_result}")
+                else:
+                    print(f"⚠️ Warning: Experiment status is '{session_timer_state['experiment_status']}', not 'running'. Skipping agent activation.")
+                    activation_result = {'success': False, 'error': 'Experiment not in running state'}
+            except Exception as e:
+                print(f"Error auto-activating agents: {e}")
+        else:
+            print(f"⏸️ Hidden Profiles experiment: Agents will be activated after first human vote is submitted")
         
         print("✅ Experiment start completed successfully")
         return jsonify({
@@ -2480,7 +3093,7 @@ def check_and_start_experiment():
         session = cur.fetchone()
         if not session:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Session not found"}), 404
         
         # Count logged in participants
@@ -2496,7 +3109,7 @@ def check_and_start_experiment():
         
         counts = cur.fetchone()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         print(f"🔍 Participant counts: {counts}")
         
@@ -2633,7 +3246,7 @@ def resume_experiment():
             
             agents = cur.fetchall()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
 
             # Reactivate agents
             if agents:
@@ -2785,6 +3398,58 @@ def reset_experiment():
                 WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s)
             """, (session_code,))
             
+            # For Hidden Profiles: Clean up experiment_config before deleting session
+            cur.execute("""
+                SELECT experiment_type, experiment_config 
+                FROM sessions 
+                WHERE session_code = %s
+            """, (session_code,))
+            session_row = cur.fetchone()
+            if session_row and session_row['experiment_type'] == 'hiddenprofiles':
+                experiment_config = session_row['experiment_config'] or {}
+                if 'hiddenProfiles' in experiment_config:
+                    # Get all participant codes that will be deleted
+                    cur.execute("""
+                        SELECT participant_code 
+                        FROM participants 
+                        WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s)
+                    """, (session_code,))
+                    participant_codes = [row[0] for row in cur.fetchall()]
+                    
+                    # Clean up participantInitiatives, participantCandidateDocs, and votes
+                    if 'participantInitiatives' in experiment_config['hiddenProfiles']:
+                        for code in participant_codes:
+                            experiment_config['hiddenProfiles']['participantInitiatives'].pop(code, None)
+                            base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                            experiment_config['hiddenProfiles']['participantInitiatives'].pop(base_code, None)
+                    
+                    if 'participantCandidateDocs' in experiment_config['hiddenProfiles']:
+                        for code in participant_codes:
+                            experiment_config['hiddenProfiles']['participantCandidateDocs'].pop(code, None)
+                            base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                            experiment_config['hiddenProfiles']['participantCandidateDocs'].pop(base_code, None)
+                    
+                    if 'votes' in experiment_config['hiddenProfiles']:
+                        for code in participant_codes:
+                            experiment_config['hiddenProfiles']['votes'].pop(code, None)
+                            base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                            experiment_config['hiddenProfiles']['votes'].pop(base_code, None)
+                    
+                    # Clear candidate names, candidate docs, and public info for this session
+                    # This ensures each session starts fresh
+                    experiment_config['hiddenProfiles'].pop('candidateNames', None)
+                    experiment_config['hiddenProfiles'].pop('candidateDocs', None)
+                    experiment_config['hiddenProfiles'].pop('publicInfo', None)
+                    experiment_config['hiddenProfiles'].pop('candidateDocsUpdatedAt', None)
+                    
+                    # Update experiment_config before deleting session
+                    cur.execute("""
+                        UPDATE sessions 
+                        SET experiment_config = %s 
+                        WHERE session_code = %s
+                    """, (json.dumps(experiment_config), session_code))
+                    print(f"🧹 Cleaned up Hidden Profiles data from experiment_config for session {session_code}")
+            
             # Delete the session itself
             cur.execute("""
                 DELETE FROM sessions 
@@ -2793,7 +3458,7 @@ def reset_experiment():
             
             conn.commit()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             
             print(f"✅ Reset {session_code} - cleared all game data and deleted session")
             
@@ -2959,9 +3624,54 @@ def timer_reset():
                 WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s)
             """, (session_code,))
             
+            # For Hidden Profiles: Clean up participantInitiatives, participantCandidateDocs, and votes
+            cur.execute("""
+                SELECT experiment_type, experiment_config 
+                FROM sessions 
+                WHERE session_code = %s
+            """, (session_code,))
+            session_row = cur.fetchone()
+            if session_row and session_row['experiment_type'] == 'hiddenprofiles':
+                experiment_config = session_row['experiment_config'] or {}
+                if 'hiddenProfiles' in experiment_config:
+                    # Get all participant codes in this session
+                    cur.execute("""
+                        SELECT participant_code 
+                        FROM participants 
+                        WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s)
+                    """, (session_code,))
+                    participant_codes = [row[0] for row in cur.fetchall()]
+                    
+                    # Clean up participantInitiatives, participantCandidateDocs, and votes
+                    if 'participantInitiatives' in experiment_config['hiddenProfiles']:
+                        for code in participant_codes:
+                            experiment_config['hiddenProfiles']['participantInitiatives'].pop(code, None)
+                            base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                            experiment_config['hiddenProfiles']['participantInitiatives'].pop(base_code, None)
+                    
+                    if 'participantCandidateDocs' in experiment_config['hiddenProfiles']:
+                        for code in participant_codes:
+                            experiment_config['hiddenProfiles']['participantCandidateDocs'].pop(code, None)
+                            base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                            experiment_config['hiddenProfiles']['participantCandidateDocs'].pop(base_code, None)
+                    
+                    if 'votes' in experiment_config['hiddenProfiles']:
+                        for code in participant_codes:
+                            experiment_config['hiddenProfiles']['votes'].pop(code, None)
+                            base_code = code.rsplit('_', 1)[0] if '_' in code else code
+                            experiment_config['hiddenProfiles']['votes'].pop(base_code, None)
+                    
+                    # Update experiment_config
+                    cur.execute("""
+                        UPDATE sessions 
+                        SET experiment_config = %s 
+                        WHERE session_code = %s
+                    """, (json.dumps(experiment_config), session_code))
+                    print(f"🧹 Cleaned up Hidden Profiles participant data from experiment_config for session {session_code}")
+            
             conn.commit()
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             
             print(f"✅ Timer reset {session_code} - cleared all game data")
             
@@ -2995,11 +3705,32 @@ def get_timer_state_api():
     session_code = request.args.get('session_code')
     timer_state = get_timer_state(session_code)
     
+    # Get session_started_at from database for accurate time calculation
+    session_started_at = None
+    if session_code:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT session_started_at 
+                FROM sessions 
+                WHERE session_code = %s
+            """, (session_code,))
+            result = cur.fetchone()
+            if result and result.get('session_started_at'):
+                session_started_at = result['session_started_at'].isoformat() if hasattr(result['session_started_at'], 'isoformat') else str(result['session_started_at'])
+            cur.close()
+            return_db_connection(conn)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not get session_started_at: {e}")
+    
     response_data = {
         'experiment_status': timer_state['experiment_status'],
         'time_remaining': timer_state['time_remaining'],
         'round_duration_minutes': timer_state['round_duration_minutes'],
-        'session_code': session_code
+        'session_code': session_code,
+        'session_started_at': session_started_at or timer_state.get('round_start_time'),
+        'round_start_time': timer_state.get('round_start_time')
     }
     return jsonify(response_data)
 
@@ -3089,7 +3820,7 @@ def get_participants():
         session_result = cur.fetchone()
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Get total orders from experiment config, default to 3
         total_orders = 3  # Default value
@@ -3325,7 +4056,7 @@ def get_daytrader_investment_history():
         participant = cur.fetchone()
         if not participant:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Participant not found"}), 404
         
         # Get investment history
@@ -3339,7 +4070,7 @@ def get_daytrader_investment_history():
         investments = cur.fetchall()
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Format investments for frontend
         formatted_investments = []
@@ -3382,11 +4113,22 @@ def clear_daytrader_investments():
 
 @app.route('/api/participants/register', methods=['POST'])
 def register_human_participant():
-    """Register a human participant"""
+    """Register a human participant, handles normal and mTurk registration."""
     try:
         data = request.get_json()
         
-        participant_code = data.get('participant_code')
+        # mTurk parameters from URL query string
+        mturk_worker_id = request.args.get('workerId')
+        mturk_assignment_id = request.args.get('assignmentId')
+        mturk_hit_id = request.args.get('hitId')
+        is_mturk_preview = mturk_assignment_id == 'ASSIGNMENT_ID_NOT_AVAILABLE'
+
+        # If it's an mTurk worker, use their workerId as the participant_code
+        if mturk_worker_id:
+            participant_code = mturk_worker_id
+        else:
+            participant_code = data.get('participant_code')
+
         session_code = data.get('session_code')
         specialty_override = data.get('specialty_shape')  # Optional override
         tag = data.get('tag')  # Optional tag
@@ -3414,7 +4156,7 @@ def register_human_participant():
         
         if cur.fetchone():
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Participant already exists"}), 400
         
         # Get session ID
@@ -3422,7 +4164,7 @@ def register_human_participant():
         session_result = cur.fetchone()
         if not session_result:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Session not found"}), 404
         
         session_id = session_result['session_id']
@@ -3474,12 +4216,14 @@ def register_human_participant():
                 INSERT INTO participants 
                 (participant_id, session_id, participant_code, participant_type, 
                  color_shape_combination, specialty_shape, login_status, money, 
-                 is_agent, agent_type, agent_status, last_activity, session_code, tag, orders)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 is_agent, agent_type, agent_status, last_activity, session_code, tag, orders,
+                 mturk_worker_id, mturk_assignment_id, mturk_hit_id, is_preview)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 str(uuid.uuid4()), session_id, participant_code, 'human',
                 color_shape_combination, specialty_shape, 'not_logged_in', get_session_config(session_code).get('startingMoney', 300),
-                False, None, 'inactive', datetime.now(timezone.utc), session_code, tag, orders_json
+                False, None, 'inactive', datetime.now(timezone.utc), session_code, tag, orders_json,
+                mturk_worker_id, mturk_assignment_id, mturk_hit_id, is_mturk_preview
             ))
         elif experiment_type == 'essayranking':
             # For essay ranking experiments, use essay-specific fields
@@ -3528,7 +4272,7 @@ def register_human_participant():
         
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return jsonify({
             "success": True,
@@ -3551,7 +4295,7 @@ def register_human_participant():
             if 'cur' in locals():
                 cur.close()
             if 'conn' in locals():
-                conn.close()
+                return_db_connection(conn)
         except:
             pass
             
@@ -3582,7 +4326,7 @@ def update_participant():
 
         if not participant:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Participant not found"}), 404
 
         # Prepare update fields
@@ -3618,7 +4362,7 @@ def update_participant():
 
         if not update_fields:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "No valid fields to update"}), 400
 
         update_fields_str = ", ".join(update_fields)
@@ -3633,7 +4377,7 @@ def update_participant():
 
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
 
         return jsonify({
             "success": True,
@@ -3721,7 +4465,7 @@ def delete_participant():
 
         if not resolved:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             tried = {
                 "participant_id": participant_id,
                 "participant_code": participant_code,
@@ -3740,7 +4484,7 @@ def delete_participant():
 
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
 
         return jsonify({
             "success": True,
@@ -3783,7 +4527,7 @@ def participant_login():
         
         if not participant:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({
                 "success": False,
                 "message": f"Participant '{participant_code}' not found in session '{session_code}'. Please register first or check your credentials."
@@ -3811,7 +4555,7 @@ def participant_login():
         
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Log successful login
         logger.log_login(session_code)
@@ -3884,7 +4628,7 @@ def participant_logout():
         
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Log successful logout
         logger.log_logout()
@@ -3929,7 +4673,7 @@ def get_current_participant_id(participant_code, session_code=None):
         
         result = cur.fetchone()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return result['participant_id'] if result else None
     except Exception as e:
@@ -4120,7 +4864,7 @@ def get_trades():
         
         trades = cur.fetchall()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Separate trades into pending and completed
         pending_offers = []
@@ -4203,7 +4947,7 @@ def get_messages():
         
         messages = cur.fetchall()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Extract display names for agents in the results
         def extract_display_name(participant_code):
@@ -4257,7 +5001,7 @@ def get_participant_trades():
         
         if not current_participant:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Current participant not found"}), 404
         
         current_id = current_participant['participant_id']
@@ -4351,7 +5095,7 @@ def get_participant_trades():
             
             if not target_participant_data:
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 return jsonify({"error": "Target participant not found"}), 404
             
             target_id = target_participant_data['participant_id']
@@ -4433,7 +5177,7 @@ def get_participant_trades():
             completed_trades = cur.fetchall()
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Extract display names for agents in the results
         def extract_display_name(participant_code):
@@ -4513,7 +5257,7 @@ def get_participant_messages():
         
         if not current_participant or not target_participant_data:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Participant not found"}), 404
         
         # Get session ID for logging
@@ -4543,7 +5287,7 @@ def get_participant_messages():
         
         messages = cur.fetchall()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Extract display names for agents in the results
         def extract_display_name(participant_code):
@@ -4619,7 +5363,7 @@ def get_participants_status():
                 total_orders = 3
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Map to frontend expected format with proper participant type and orders data
         mapped = []
@@ -4862,10 +5606,230 @@ def send_message():
                 'message_id': result.get('message_id'),
                 'timestamp': datetime.now().isoformat()
             }
+            
+            # Add wordguessing guess verification result if present (only for wordguessing experiments)
+            if experiment_type == 'wordguessing':
+                if result.get('is_correct_guess') is not None:
+                    message_data['is_correct_guess'] = result.get('is_correct_guess')
+                if result.get('word_guessed'):
+                    message_data['word_guessed'] = True
+                    message_data['session_code'] = session_code
+            
             # Send to participants room
             socketio.emit('new_message', message_data, room='participants')
             # Also send to researchers room so researcher dashboard gets updates
             socketio.emit('new_message', message_data, room='researchers')
+            
+            # If word was guessed correctly, emit a special event (only for wordguessing experiments)
+            if experiment_type == 'wordguessing' and result.get('word_guessed'):
+                socketio.emit('word_guessed', {
+                    'session_code': session_code,
+                    'guesser': participant_code,
+                    'word': content,
+                    'timestamp': datetime.now().isoformat()
+                }, room='participants')
+                socketio.emit('word_guessed', {
+                    'session_code': session_code,
+                    'guesser': participant_code,
+                    'word': content,
+                    'timestamp': datetime.now().isoformat()
+                }, room='researchers')
+            
+            # For Hidden Profiles: Trigger passive agents when they receive a message
+            if experiment_type == 'hiddenprofiles':
+                print(f"[PASSIVE TRIGGER] Hidden Profiles message received from {participant_code} to {recipient} in session {session_code}")
+                try:
+                    with DatabaseConnection() as conn:
+                        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                        
+                        experiment_config = session_config.get('experiment_config', {})
+                        hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+                        participant_initiatives = hidden_profiles_config.get('participantInitiatives', {})
+                        
+                        # If initiatives dict is empty, try reading directly from database
+                        if not participant_initiatives:
+                            print(f"[PASSIVE TRIGGER] Participant initiatives empty in session_config, reading from database...")
+                            cur.execute("SELECT experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+                            db_result = cur.fetchone()
+                            if db_result and db_result.get('experiment_config'):
+                                db_config = db_result['experiment_config']
+                                if isinstance(db_config, str):
+                                    import json
+                                    db_config = json.loads(db_config)
+                                db_hidden_profiles = db_config.get('hiddenProfiles', {})
+                                participant_initiatives = db_hidden_profiles.get('participantInitiatives', {})
+                                print(f"[PASSIVE TRIGGER] Loaded from database: {participant_initiatives}")
+                        
+                        print(f"[PASSIVE TRIGGER] Participant initiatives: {participant_initiatives}")
+                        
+                        # Get all passive agents in the session
+                        cur.execute("""
+                            SELECT participant_code, is_agent
+                            FROM participants 
+                            WHERE session_code = %s AND is_agent = true
+                        """, (session_code,))
+                        
+                        all_agents = cur.fetchall()
+                        print(f"[PASSIVE TRIGGER] Found {len(all_agents)} agent(s) in session {session_code}: {[a['participant_code'] for a in all_agents]}")
+                        
+                        # Check if agents are started - if not, start them now
+                        agents_to_start = []
+                        for agent in all_agents:
+                            agent_code = agent['participant_code']
+                            agent_key = f"{session_code}:{agent_code}" if session_code else agent_code
+                            if agent_key not in AGENT_THREADS or not AGENT_THREADS[agent_key].get('thread') or not AGENT_THREADS[agent_key]['thread'].is_alive():
+                                agents_to_start.append(agent_code)
+                        
+                        if agents_to_start:
+                            print(f"[PASSIVE TRIGGER] Agents not started yet: {agents_to_start}. Starting them now...")
+                            # Start agents that aren't running
+                            for agent_code in agents_to_start:
+                                try:
+                                    if _start_agent_thread(agent_code, None, use_llm=True, llm_model='gpt-4o-mini',
+                                                          use_memory=True, max_memory_length=20,
+                                                          session_code=session_code, experiment_type=experiment_type):
+                                        print(f"[PASSIVE TRIGGER] ✅ Started agent {agent_code}")
+                                    else:
+                                        print(f"[PASSIVE TRIGGER] ⚠️ Failed to start agent {agent_code} (may already be starting)")
+                                except Exception as e:
+                                    print(f"[PASSIVE TRIGGER] ❌ Error starting agent {agent_code}: {e}")
+                        
+                        print(f"[PASSIVE TRIGGER] Available agent keys after starting: {list(AGENT_THREADS.keys())}")
+                        
+                        # For group_chat/broadcast: Trigger all passive agents when ANY message is sent
+                        # For direct messages: Trigger the recipient if they're a passive agent
+                        communication_level = session_config.get('communicationLevel', 'chat')
+                        print(f"[PASSIVE TRIGGER] Communication level: {communication_level}, recipient: {recipient}")
+                        
+                        if recipient == "all":
+                            # Broadcast message - trigger all passive agents
+                            print(f"[PASSIVE TRIGGER] Broadcast message detected - triggering all passive agents")
+                            for agent in all_agents:
+                                agent_code = agent['participant_code']
+                                agent_key = f"{session_code}:{agent_code}" if session_code else agent_code
+                                agent_info = AGENT_THREADS.get(agent_key)
+                                
+                                # Use database/config as source of truth for initiative
+                                initiative = participant_initiatives.get(agent_code)
+                                if not initiative:
+                                    base_code = agent_code.rsplit('_', 1)[0] if '_' in agent_code else agent_code
+                                    initiative = participant_initiatives.get(base_code)
+                                
+                                # Default to 'active' if not found
+                                if not initiative:
+                                    initiative = 'active'
+                                
+                                is_passive = (initiative == 'passive')
+                                
+                                # Update controller's is_passive to match database/config
+                                if agent_info and agent_info.get('controller'):
+                                    old_is_passive = getattr(agent_info['controller'], 'is_passive', False)
+                                    agent_info['controller'].is_passive = is_passive
+                                    if old_is_passive != is_passive:
+                                        print(f"[PASSIVE TRIGGER] Updated controller.is_passive from {old_is_passive} to {is_passive} for {agent_code}")
+                                
+                                print(f"[PASSIVE TRIGGER] Agent {agent_code}: initiative={initiative}, is_passive={is_passive}")
+                                if is_passive:
+                                    print(f"[PASSIVE TRIGGER] Triggering passive agent {agent_code} due to broadcast message from {participant_code}")
+                                    triggered = _trigger_passive_agent(agent_code, session_code)
+                                    if not triggered:
+                                        print(f"[PASSIVE TRIGGER WARNING] Failed to trigger passive agent {agent_code}")
+                                    else:
+                                        print(f"[PASSIVE TRIGGER] Successfully triggered passive agent {agent_code}")
+                        else:
+                            # Direct message - check if recipient is a passive agent
+                            # Also trigger all passive agents in group_chat mode (they should see all messages)
+                            print(f"[PASSIVE TRIGGER] Direct message detected - checking communication level: {communication_level}")
+                            
+                            if communication_level == 'group_chat':
+                                # In group_chat, all agents should see all messages, so trigger all passive agents
+                                for agent in all_agents:
+                                    agent_code = agent['participant_code']
+                                    # Skip the sender
+                                    if agent_code == participant_code:
+                                        continue
+                                    
+                                    agent_key = f"{session_code}:{agent_code}" if session_code else agent_code
+                                    agent_info = AGENT_THREADS.get(agent_key)
+                                    
+                                    # Use database/config as source of truth for initiative
+                                    initiative = participant_initiatives.get(agent_code)
+                                    if not initiative:
+                                        base_code = agent_code.rsplit('_', 1)[0] if '_' in agent_code else agent_code
+                                        initiative = participant_initiatives.get(base_code)
+                                    
+                                    # Default to 'active' if not found
+                                    if not initiative:
+                                        initiative = 'active'
+                                    
+                                    is_passive = (initiative == 'passive')
+                                    
+                                    # Update controller's is_passive to match database/config
+                                    if agent_info and agent_info.get('controller'):
+                                        old_is_passive = getattr(agent_info['controller'], 'is_passive', False)
+                                        agent_info['controller'].is_passive = is_passive
+                                        if old_is_passive != is_passive:
+                                            print(f"[PASSIVE TRIGGER] Updated controller.is_passive from {old_is_passive} to {is_passive} for {agent_code}")
+                                    
+                                    if is_passive:
+                                        print(f"[PASSIVE TRIGGER] Triggering passive agent {agent_code} due to group_chat message from {participant_code}")
+                                        triggered = _trigger_passive_agent(agent_code, session_code)
+                                        if not triggered:
+                                            print(f"[PASSIVE TRIGGER WARNING] Failed to trigger passive agent {agent_code}")
+                            else:
+                                # In chat mode, only trigger the specific recipient if they're a passive agent
+                                cur.execute("""
+                                    SELECT participant_code, participant_type, is_agent
+                                    FROM participants 
+                                    WHERE (participant_code = %s OR participant_code = %s)
+                                    AND session_code = %s
+                                """, (recipient, f"{recipient}_{session_code}", session_code))
+                                
+                                recipient_participant = cur.fetchone()
+                                
+                                if recipient_participant and recipient_participant.get('is_agent'):
+                                    # Check if this agent is passive
+                                    agent_code = recipient_participant['participant_code']
+                                    agent_key = f"{session_code}:{agent_code}" if session_code else agent_code
+                                    agent_info = AGENT_THREADS.get(agent_key)
+                                    
+                                    # Use database/config as source of truth for initiative
+                                    initiative = participant_initiatives.get(agent_code) or participant_initiatives.get(recipient)
+                                    if not initiative:
+                                        base_code = agent_code.rsplit('_', 1)[0] if '_' in agent_code else agent_code
+                                        initiative = participant_initiatives.get(base_code)
+                                    
+                                    # Default to 'active' if not found
+                                    if not initiative:
+                                        initiative = 'active'
+                                    
+                                    is_passive = (initiative == 'passive')
+                                    
+                                    # Update controller's is_passive to match database/config
+                                    if agent_info and agent_info.get('controller'):
+                                        old_is_passive = getattr(agent_info['controller'], 'is_passive', False)
+                                        agent_info['controller'].is_passive = is_passive
+                                        if old_is_passive != is_passive:
+                                            print(f"[PASSIVE TRIGGER] Updated controller.is_passive from {old_is_passive} to {is_passive} for {agent_code}")
+                                    
+                                    if is_passive:
+                                        print(f"[PASSIVE TRIGGER] Triggering passive agent {agent_code} due to direct message from {participant_code}")
+                                        triggered = _trigger_passive_agent(agent_code, session_code)
+                                        if not triggered:
+                                            print(f"[PASSIVE TRIGGER WARNING] Failed to trigger passive agent {agent_code}")
+                                            
+                                            # Also try with session suffix if different
+                                            if agent_code != f"{recipient}_{session_code}":
+                                                triggered = _trigger_passive_agent(f"{recipient}_{session_code}", session_code)
+                                                if triggered:
+                                                    print(f"[PASSIVE TRIGGER] Successfully triggered with session suffix: {recipient}_{session_code}")
+                        
+                        cur.close()
+                except Exception as e:
+                    print(f"[PASSIVE TRIGGER ERROR] Error triggering passive agent: {e}")
+                    import traceback
+                    print(traceback.format_exc())
+                    # Don't fail the message send if triggering fails
         
         return jsonify(result)
         
@@ -5020,7 +5984,7 @@ def respond_trade_offer():
                 """, (data.get('transaction_id'),))
                 transaction_info = cur.fetchone()
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
                 
                 if transaction_info:
                     # Determine seller and buyer based on offer type
@@ -5182,14 +6146,14 @@ def register_agent():
         
         if cur.fetchone():
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Agent already exists in this session"}), 400
         
         cur.execute("SELECT session_id FROM sessions WHERE session_code = %s", (session_code,))
         session_result = cur.fetchone()
         if not session_result:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "Session not found"}), 404
         
         session_id = session_result['session_id']
@@ -5268,7 +6232,36 @@ def register_agent():
         
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
+        
+        # For Hidden Profiles: Automatically start PASSIVE agents after registration
+        # (Active agents will be started when experiment begins)
+        if experiment_type == 'hiddenprofiles':
+            print(f"[AGENT REGISTRATION] Hidden Profiles agent registered. Checking if agent {isolated_participant_code} should be started...")
+            try:
+                # Get initiative to determine if agent should be passive
+                session_config = get_session_config(session_code)
+                experiment_config = session_config.get('experiment_config', {})
+                hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+                participant_initiatives = hidden_profiles_config.get('participantInitiatives', {})
+                initiative = participant_initiatives.get(isolated_participant_code) or participant_initiatives.get(participant_code, 'active')
+                
+                # Only start passive agents during registration
+                # Active agents will be started when the experiment begins
+                if initiative == 'passive':
+                    print(f"[AGENT REGISTRATION] Agent {isolated_participant_code} is passive - starting now...")
+                    if _start_agent_thread(isolated_participant_code, None, use_llm=True, llm_model='gpt-4o-mini',
+                                          use_memory=True, max_memory_length=20,
+                                          session_code=session_code, experiment_type=experiment_type):
+                        print(f"[AGENT REGISTRATION] ✅ Passive agent {isolated_participant_code} started successfully")
+                    else:
+                        print(f"[AGENT REGISTRATION] ⚠️ Passive agent {isolated_participant_code} may already be running")
+                else:
+                    print(f"[AGENT REGISTRATION] Agent {isolated_participant_code} is active (initiative={initiative}) - will be started when experiment begins")
+            except Exception as e:
+                print(f"[AGENT REGISTRATION] ❌ Error checking/starting agent {isolated_participant_code}: {e}")
+                import traceback
+                print(traceback.format_exc())
         
         response_data = {
             "success": True,
@@ -5410,7 +6403,7 @@ def regenerate_agent_orders():
         
         if not agents:
             cur.close()
-            conn.close()
+            return_db_connection(conn)
             return jsonify({"error": "No agents found in session"}), 404
         
         updated_count = 0
@@ -5443,7 +6436,7 @@ def regenerate_agent_orders():
         
         conn.commit()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return jsonify({
             "success": True,
@@ -5497,7 +6490,7 @@ def test_connection():
             is_agent_exists = False
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return jsonify({
             "success": True,
@@ -5558,7 +6551,7 @@ def get_current_specialties_in_session(session_code: str) -> list:
         
         specialties = [row[0] for row in cur.fetchall()]
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         return specialties
         
@@ -5679,7 +6672,7 @@ def debug_transaction_status():
         
         transaction = cur.fetchone()
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         if transaction:
             return jsonify({
@@ -5745,7 +6738,7 @@ def export_session_logs():
                 else:
                     print(f"⚠️ No session found for session_code: {session_code}")
                 cur.close()
-                conn.close()
+                return_db_connection(conn)
             except Exception as e:
                 print(f"❌ Error getting session_id for {session_code}: {e}")
             
@@ -5906,7 +6899,7 @@ def create_session_summary(session_code):
         session_info = cur.fetchone()
         
         cur.close()
-        conn.close()
+        return_db_connection(conn)
         
         # Create summary
         summary = {
@@ -6322,6 +7315,1785 @@ def assign_wordguessing_roles():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ============================================================================
+# MTURK INTEGRATION API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/mturk/sessions/<session_code>/associate', methods=['POST'])
+def associate_mturk_hit(session_code):
+    """Associate an external mTurk HIT with a session."""
+    data = request.get_json()
+    hit_id = data.get('hit_id')
+    environment = data.get('environment')
+
+    if not hit_id or not environment:
+        return jsonify({'error': 'hit_id and environment are required'}), 400
+
+    try:
+        with DatabaseConnection() as conn:
+            with conn.cursor() as cur:
+                # Check if mturk_tasks table exists
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'mturk_tasks'
+                    )
+                """)
+                table_exists = cur.fetchone()[0]
+                
+                if not table_exists:
+                    logger.warning("mturk_tasks table does not exist. mTurk functionality may not be available.")
+                    return jsonify({
+                        'error': 'mTurk tasks table not found. Please ensure the database schema is up to date.',
+                        'success': False
+                    }), 503
+                
+                cur.execute("SELECT session_id FROM sessions WHERE session_code = %s", (session_code,))
+                session = cur.fetchone()
+                if not session:
+                    return jsonify({'error': 'Session not found'}), 404
+                
+                session_id = session['session_id']
+                
+                cur.execute(
+                    """
+                    INSERT INTO mturk_tasks (hit_id, session_id, environment)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (hit_id) DO UPDATE SET session_id = EXCLUDED.session_id;
+                    """,
+                    (hit_id, session_id, environment)
+                )
+                conn.commit()
+        return jsonify({'success': True, 'message': f'HIT {hit_id} associated with session {session_code}.'})
+    except Exception as e:
+        error_msg = str(e)
+        if 'does not exist' in error_msg or 'relation' in error_msg.lower():
+            logger.error(f"Database table error: {e}")
+            return jsonify({
+                'error': 'mTurk tasks table not found. Please ensure the database schema is up to date.',
+                'success': False
+            }), 503
+        logger.error(f"Error associating HIT: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/mturk/sessions/<session_code>/assignments', methods=['GET'])
+def get_mturk_assignments(session_code):
+    """Get all assignments for a session's associated HIT."""
+    try:
+        with DatabaseConnection() as conn:
+            with conn.cursor() as cur:
+                # Check if mturk_tasks table exists
+                cur.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'mturk_tasks'
+                    )
+                """)
+                table_exists = cur.fetchone()[0]
+                
+                if not table_exists:
+                    logger.warning("mturk_tasks table does not exist. mTurk functionality may not be available.")
+                    return jsonify({
+                        'error': 'mTurk tasks table not found. Please ensure the database schema is up to date.',
+                        'success': False
+                    }), 503
+                
+                cur.execute("SELECT hit_id FROM mturk_tasks WHERE session_id = (SELECT session_id FROM sessions WHERE session_code = %s)", (session_code,))
+                task = cur.fetchone()
+                if not task:
+                    return jsonify({'error': 'No mTurk HIT associated with this session'}), 404
+                hit_id = task['hit_id']
+
+        assignments = mturk_service.list_assignments_for_hit(hit_id)
+        # Here you could enrich the assignments with data from your local `participants` table
+        return jsonify({'success': True, 'assignments': assignments})
+    except Exception as e:
+        error_msg = str(e)
+        if 'does not exist' in error_msg or 'relation' in error_msg.lower():
+            logger.error(f"Database table error: {e}")
+            return jsonify({
+                'error': 'mTurk tasks table not found. Please ensure the database schema is up to date.',
+                'success': False
+            }), 503
+        logger.error(f"Error getting assignments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/mturk/assignments/<assignment_id>/approve', methods=['POST'])
+def approve_mturk_assignment(assignment_id):
+    """Approve an mTurk assignment."""
+    data = request.get_json() or {}
+    feedback = data.get('feedback', 'Thank you for your work!')
+    
+    success = mturk_service.approve_assignment(assignment_id, feedback)
+    if success:
+        return jsonify({'success': True, 'message': f'Assignment {assignment_id} approved.'})
+    else:
+        return jsonify({'error': f'Failed to approve assignment {assignment_id}.'}), 500
+
+@app.route('/api/mturk/assignments/<assignment_id>/reject', methods=['POST'])
+def reject_mturk_assignment(assignment_id):
+    """Reject an mTurk assignment."""
+    data = request.get_json()
+    reason = data.get('reason')
+    if not reason:
+        return jsonify({'error': 'A reason is required to reject an assignment.'}), 400
+
+    success = mturk_service.reject_assignment(assignment_id, reason)
+    if success:
+        return jsonify({'success': True, 'message': f'Assignment {assignment_id} rejected.'})
+    else:
+        return jsonify({'error': f'Failed to reject assignment {assignment_id}.'}), 500
+
+@app.route('/api/mturk/assign-hiddenprofile', methods=['POST'])
+def assign_hiddenprofile_for_mturk():
+    """
+    assign registered hiddenprofiles session and participant
+    """
+    try:
+        data = request.get_json() or {}
+        worker_id = data.get('workerId') or request.args.get('workerId')
+        assignment_id = data.get('assignmentId') or request.args.get('assignmentId')
+        hit_id = data.get('hitId') or request.args.get('hitId')
+        
+        logger.info(f"[MTURK] Received assignment request: workerId={worker_id}, assignmentId={assignment_id}, hitId={hit_id}")
+        
+        if not worker_id or not assignment_id:
+            logger.warning(f"[MTURK] Missing required parameters: workerId={worker_id}, assignmentId={assignment_id}")
+            return jsonify({
+                'success': False,
+                'error': 'workerId and assignmentId are required'
+            }), 400
+        
+        # preview mode?
+        is_preview = assignment_id == 'ASSIGNMENT_ID_NOT_AVAILABLE'
+        if is_preview:
+            return jsonify({
+                'success': False,
+                'error': 'This is a preview. Please accept the HIT first.',
+                'is_preview': True
+            }), 400
+        
+        with DatabaseConnection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 1. if the worker has already been assigned, return the existing information
+                cur.execute("""
+                    SELECT p.session_code, p.participant_code, p.participant_id, s.session_id, s.experiment_type
+                    FROM participants p
+                    JOIN sessions s ON p.session_id = s.session_id
+                    WHERE p.mturk_worker_id = %s
+                    AND p.mturk_assignment_id = %s
+                    AND s.experiment_type = 'hiddenprofiles'
+                """, (worker_id, assignment_id))
+                
+                existing = cur.fetchone()
+                if existing:
+                    # already assigned, return the existing information
+                    return jsonify({
+                        'success': True,
+                        'session_code': existing['session_code'],
+                        'participant_code': existing['participant_code'],
+                        'participant_id': str(existing['participant_id']),
+                        'session_id': str(existing['session_id']),
+                        'already_assigned': True,
+                        'message': 'Already assigned to a session'
+                    })
+                
+                # 2. find an unassigned session + participant
+                # First, check what sessions exist and why they might not match
+                cur.execute("""
+                    SELECT 
+                        s.session_id, 
+                        s.session_code,
+                        s.experiment_type,
+                        s.session_status,
+                        COUNT(p.participant_id) as participant_count
+                    FROM sessions s
+                    LEFT JOIN participants p ON p.session_id = s.session_id
+                    WHERE s.experiment_type = 'hiddenprofiles' OR s.experiment_type IS NULL
+                    GROUP BY s.session_id, s.session_code, s.experiment_type, s.session_status
+                """)
+                
+                all_sessions = cur.fetchall()
+                logger.info(f"[MTURK] Found {len(all_sessions)} session(s) with experiment_type='hiddenprofiles' or NULL")
+                
+                # Check available sessions with detailed diagnostics
+                cur.execute("""
+                    SELECT 
+                        s.session_id, 
+                        s.session_code,
+                        s.experiment_type,
+                        s.session_status,
+                        p.participant_id,
+                        p.participant_code,
+                        p.is_agent,
+                        p.participant_type,
+                        p.mturk_worker_id
+                    FROM sessions s
+                    LEFT JOIN participants p ON p.session_id = s.session_id AND p.is_agent = false AND p.participant_type = 'human'
+                    WHERE s.experiment_type = 'hiddenprofiles' OR s.experiment_type IS NULL
+                """)
+                
+                all_sessions_with_participants = cur.fetchall()
+                
+                # Log diagnostic information
+                logger.info(f"[MTURK] Diagnostic: Checking {len(all_sessions_with_participants)} session+participant combinations")
+                
+                for row in all_sessions_with_participants:
+                    issues = []
+                    if row['experiment_type'] != 'hiddenprofiles':
+                        issues.append(f"experiment_type='{row['experiment_type']}' (needs 'hiddenprofiles')")
+                    if row['session_status'] != 'idle':
+                        issues.append(f"session_status='{row['session_status']}' (needs 'idle')")
+                    if row['participant_id'] is None:
+                        issues.append("no human participant found")
+                    elif row['is_agent']:
+                        issues.append(f"participant is_agent={row['is_agent']} (needs false)")
+                    elif row['participant_type'] != 'human':
+                        issues.append(f"participant_type='{row['participant_type']}' (needs 'human')")
+                    elif row['mturk_worker_id'] is not None:
+                        issues.append(f"already assigned to worker '{row['mturk_worker_id']}'")
+                    
+                    if issues:
+                        logger.info(f"[MTURK] Session {row['session_code']}: ❌ {'; '.join(issues)}")
+                    else:
+                        logger.info(f"[MTURK] Session {row['session_code']}: ✅ Ready for assignment")
+                
+                # Now try to find an available session
+                cur.execute("""
+                    SELECT 
+                        s.session_id, 
+                        s.session_code,
+                        p.participant_id,
+                        p.participant_code
+                    FROM sessions s
+                    INNER JOIN participants p ON p.session_id = s.session_id
+                    WHERE s.experiment_type = 'hiddenprofiles'
+                      AND s.session_status = 'idle'
+                      AND p.is_agent = false
+                      AND p.participant_type = 'human'
+                      AND p.mturk_worker_id IS NULL
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                    FOR UPDATE OF p SKIP LOCKED
+                """)
+                
+                assignment = cur.fetchone()
+                
+                if not assignment:
+                    # Build detailed error message with diagnostics
+                    logger.warning(f"[MTURK] No available sessions found. Running diagnostics...")
+                    
+                    error_details = {
+                        'error': 'No available hiddenprofiles sessions with unassigned participants.',
+                        'diagnostics': {
+                            'total_sessions_checked': len(all_sessions),
+                            'sessions': []
+                        }
+                    }
+                    
+                    # Get detailed information about all sessions and their participants
+                    cur.execute("""
+                        SELECT 
+                            s.session_code,
+                            s.experiment_type,
+                            s.session_status,
+                            p.participant_code,
+                            p.participant_type,
+                            p.is_agent,
+                            p.mturk_worker_id,
+                            p.mturk_assignment_id
+                        FROM sessions s
+                        LEFT JOIN participants p ON p.session_id = s.session_id
+                        ORDER BY s.session_code, p.participant_code
+                    """)
+                    
+                    all_data = cur.fetchall()
+                    
+                    # Group by session
+                    sessions_dict = {}
+                    for row in all_data:
+                        session_code = row['session_code']
+                        if session_code not in sessions_dict:
+                            sessions_dict[session_code] = {
+                                'session_code': session_code,
+                                'experiment_type': row['experiment_type'],
+                                'session_status': row['session_status'],
+                                'participants': [],
+                                'issues': []
+                            }
+                        
+                        if row['participant_code']:
+                            sessions_dict[session_code]['participants'].append({
+                                'participant_code': row['participant_code'],
+                                'participant_type': row['participant_type'],
+                                'is_agent': row['is_agent'],
+                                'mturk_worker_id': row['mturk_worker_id'],
+                                'mturk_assignment_id': row['mturk_assignment_id']
+                            })
+                    
+                    # Check each session for issues
+                    for session_code, session_data in sessions_dict.items():
+                        session_issues = []
+                        
+                        # Check session-level issues
+                        if session_data['experiment_type'] != 'hiddenprofiles':
+                            session_issues.append(f"experiment_type='{session_data['experiment_type']}' (needs 'hiddenprofiles')")
+                        
+                        if session_data['session_status'] != 'idle':
+                            session_issues.append(f"session_status='{session_data['session_status']}' (needs 'idle')")
+                        
+                        # Check participants
+                        human_participants = [p for p in session_data['participants'] 
+                                            if p['participant_type'] == 'human' and not p['is_agent']]
+                        
+                        if not human_participants:
+                            session_issues.append("no human participant found (needs participant_type='human' AND is_agent=false)")
+                        else:
+                            unassigned_humans = [p for p in human_participants if p['mturk_worker_id'] is None]
+                            if not unassigned_humans:
+                                session_issues.append(f"all human participants already assigned to MTurk workers")
+                                for p in human_participants:
+                                    if p['mturk_worker_id']:
+                                        session_issues.append(f"  - {p['participant_code']} assigned to worker '{p['mturk_worker_id']}'")
+                        
+                        session_data['issues'] = session_issues
+                        error_details['diagnostics']['sessions'].append(session_data)
+                        
+                        # Log issues for this session
+                        if session_issues:
+                            logger.warning(f"[MTURK] Session '{session_code}' issues: {'; '.join(session_issues)}")
+                        else:
+                            logger.info(f"[MTURK] Session '{session_code}' appears ready but was not selected")
+                    
+                    logger.error(f"[MTURK] Assignment failed for worker {worker_id}. Details: {len(sessions_dict)} sessions checked")
+                    return jsonify(error_details), 404
+                
+                session_id = assignment['session_id']
+                session_code = assignment['session_code']
+                participant_id = assignment['participant_id']
+                participant_code = assignment['participant_code']
+                
+                # 3. update the participant's MTurk information
+                cur.execute("""
+                    UPDATE participants 
+                    SET mturk_worker_id = %s,
+                        mturk_assignment_id = %s,
+                        mturk_hit_id = %s,
+                        is_preview = %s
+                    WHERE participant_id = %s
+                    RETURNING participant_id
+                """, (
+                    worker_id,
+                    assignment_id,
+                    hit_id,
+                    False,  # is_preview
+                    participant_id
+                ))
+                
+                updated = cur.fetchone()
+                if not updated:
+                    conn.rollback()
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to update participant MTurk information'
+                    }), 500
+                
+                conn.commit()
+                
+                logger.info(f"MTurk worker {worker_id} assigned to hiddenprofiles session {session_code}, participant {participant_code}")
+                
+                return jsonify({
+                    'success': True,
+                    'session_code': session_code,
+                    'session_id': str(session_id),
+                    'participant_code': participant_code,
+                    'participant_id': str(participant_id),
+                    'already_assigned': False,
+                    'message': 'Successfully assigned to session'
+                })
+                
+    except Exception as e:
+        logger.error(f"Error in assign_hiddenprofile_for_mturk: {e}")
+        import traceback
+        error_traceback = traceback.format_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': error_traceback
+        }), 500
+
+@app.route('/api/mturk/auto-login-hiddenprofile', methods=['POST'])
+def auto_login_hiddenprofile_for_mturk():
+    """
+    auto login for an assigned mTurk worker
+    """
+    try:
+        data = request.get_json() or {}
+        worker_id = data.get('workerId') or request.args.get('workerId')
+        assignment_id = data.get('assignmentId') or request.args.get('assignmentId')
+        
+        if not worker_id or not assignment_id:
+            return jsonify({
+                'success': False,
+                'error': 'workerId and assignmentId are required'
+            }), 400
+        
+        # find the participant
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cur.execute("""
+            SELECT p.*, s.session_code
+            FROM participants p
+            JOIN sessions s ON p.session_id = s.session_id
+            WHERE p.mturk_worker_id = %s
+            AND p.mturk_assignment_id = %s
+            AND s.experiment_type = 'hiddenprofiles'
+        """, (worker_id, assignment_id))
+        
+        participant = cur.fetchone()
+        
+        if not participant:
+            cur.close()
+            return_db_connection(conn)
+            return jsonify({
+                'success': False,
+                'error': 'Participant not found. Please assign first.'
+            }), 404
+        
+        session_code = participant['session_code']
+        participant_code = participant['participant_code']
+        
+        # generate JWT token
+        token_payload = {
+            'participant_code': participant_code,
+            'session_code': session_code,
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }
+        
+        token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        # update the login status
+        cur.execute("""
+            UPDATE participants 
+            SET login_status = 'active', last_activity = %s
+            WHERE participant_code = %s AND session_code = %s
+        """, (datetime.now(timezone.utc), participant_code, session_code))
+        
+        conn.commit()
+        cur.close()
+        return_db_connection(conn)
+        
+        # log the login
+        session_id = participant['session_id']
+        logger_obj = get_human_logger(participant_code, session_id, session_code)
+        logger_obj.log_login(session_code)
+        
+        return jsonify({
+            'success': True,
+            'token': token,
+            'participant': dict(participant),
+            'session': {
+                'session_code': session_code,
+                'session_id': str(participant['session_id'])
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in auto_login_hiddenprofile_for_mturk: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# ============================================================================
+# PROLIFIC INTEGRATION API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/prolific/assign-hiddenprofile', methods=['POST'])
+def assign_hiddenprofile_for_prolific():
+    """
+    assign registered hiddenprofiles session and participant for Prolific
+    """
+    try:
+        data = request.get_json() or {}
+        prolific_pid = data.get('prolificPid') or request.args.get('PROLIFIC_PID')
+        study_id = data.get('studyId') or request.args.get('STUDY_ID')
+        prolific_session_id = data.get('prolificSessionId') or request.args.get('SESSION_ID')
+        
+        logger.info(f"[PROLIFIC] Received assignment request: prolificPid={prolific_pid}, studyId={study_id}, prolificSessionId={prolific_session_id}")
+        
+        if not prolific_pid or not study_id or not prolific_session_id:
+            logger.warning(f"[PROLIFIC] Missing required parameters: prolificPid={prolific_pid}, studyId={study_id}, prolificSessionId={prolific_session_id}")
+            return jsonify({
+                'success': False,
+                'error': 'PROLIFIC_PID, STUDY_ID, and SESSION_ID are required'
+            }), 400
+        
+        with DatabaseConnection() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 1. if the participant has already been assigned, return the existing information
+                cur.execute("""
+                    SELECT p.session_code, p.participant_code, p.participant_id, s.session_id, s.experiment_type
+                    FROM participants p
+                    JOIN sessions s ON p.session_id = s.session_id
+                    WHERE p.prolific_pid = %s
+                    AND p.prolific_study_id = %s
+                    AND p.prolific_session_id = %s
+                    AND s.experiment_type = 'hiddenprofiles'
+                """, (prolific_pid, study_id, prolific_session_id))
+                
+                existing = cur.fetchone()
+                if existing:
+                    # already assigned, return the existing information
+                    return jsonify({
+                        'success': True,
+                        'session_code': existing['session_code'],
+                        'participant_code': existing['participant_code'],
+                        'participant_id': str(existing['participant_id']),
+                        'session_id': str(existing['session_id']),
+                        'already_assigned': True,
+                        'message': 'Already assigned to a session'
+                    })
+                
+                # 2. find an unassigned session + participant
+                # First, check what sessions exist and why they might not match
+                cur.execute("""
+                    SELECT 
+                        s.session_id, 
+                        s.session_code,
+                        s.experiment_type,
+                        s.session_status,
+                        COUNT(p.participant_id) as participant_count
+                    FROM sessions s
+                    LEFT JOIN participants p ON p.session_id = s.session_id
+                    WHERE s.experiment_type = 'hiddenprofiles' OR s.experiment_type IS NULL
+                    GROUP BY s.session_id, s.session_code, s.experiment_type, s.session_status
+                """)
+                
+                all_sessions = cur.fetchall()
+                logger.info(f"[PROLIFIC] Found {len(all_sessions)} session(s) with experiment_type='hiddenprofiles' or NULL")
+                
+                # Check available sessions with detailed diagnostics
+                cur.execute("""
+                    SELECT 
+                        s.session_id, 
+                        s.session_code,
+                        s.experiment_type,
+                        s.session_status,
+                        p.participant_id,
+                        p.participant_code,
+                        p.is_agent,
+                        p.participant_type,
+                        p.prolific_pid
+                    FROM sessions s
+                    LEFT JOIN participants p ON p.session_id = s.session_id AND p.is_agent = false AND p.participant_type = 'human'
+                    WHERE s.experiment_type = 'hiddenprofiles' OR s.experiment_type IS NULL
+                """)
+                
+                all_sessions_with_participants = cur.fetchall()
+                
+                # Log diagnostic information
+                logger.info(f"[PROLIFIC] Diagnostic: Checking {len(all_sessions_with_participants)} session+participant combinations")
+                
+                for row in all_sessions_with_participants:
+                    issues = []
+                    if row['experiment_type'] != 'hiddenprofiles':
+                        issues.append(f"experiment_type='{row['experiment_type']}' (needs 'hiddenprofiles')")
+                    if row['session_status'] != 'idle':
+                        issues.append(f"session_status='{row['session_status']}' (needs 'idle')")
+                    if row['participant_id'] is None:
+                        issues.append("no human participant found")
+                    elif row['is_agent']:
+                        issues.append(f"participant is_agent={row['is_agent']} (needs false)")
+                    elif row['participant_type'] != 'human':
+                        issues.append(f"participant_type='{row['participant_type']}' (needs 'human')")
+                    elif row['prolific_pid'] is not None:
+                        issues.append(f"already assigned to prolific_pid '{row['prolific_pid']}'")
+                    
+                    if issues:
+                        logger.info(f"[PROLIFIC] Session {row['session_code']}: ❌ {'; '.join(issues)}")
+                    else:
+                        logger.info(f"[PROLIFIC] Session {row['session_code']}: ✅ Ready for assignment")
+                
+                # Now try to find an available session
+                cur.execute("""
+                    SELECT 
+                        s.session_id, 
+                        s.session_code,
+                        p.participant_id,
+                        p.participant_code
+                    FROM sessions s
+                    INNER JOIN participants p ON p.session_id = s.session_id
+                    WHERE s.experiment_type = 'hiddenprofiles'
+                      AND s.session_status = 'idle'
+                      AND p.is_agent = false
+                      AND p.participant_type = 'human'
+                      AND p.prolific_pid IS NULL
+                    ORDER BY RANDOM()
+                    LIMIT 1
+                    FOR UPDATE OF p SKIP LOCKED
+                """)
+                
+                assignment = cur.fetchone()
+                
+                if not assignment:
+                    # Build detailed error message with diagnostics
+                    logger.warning(f"[PROLIFIC] No available sessions found. Running diagnostics...")
+                    
+                    error_details = {
+                        'error': 'No available hiddenprofiles sessions with unassigned participants.',
+                        'diagnostics': {
+                            'total_sessions_checked': len(all_sessions),
+                            'sessions': []
+                        }
+                    }
+                    
+                    # Get detailed information about all sessions and their participants
+                    cur.execute("""
+                        SELECT 
+                            s.session_code,
+                            s.experiment_type,
+                            s.session_status,
+                            p.participant_code,
+                            p.participant_type,
+                            p.is_agent,
+                            p.prolific_pid,
+                            p.prolific_study_id,
+                            p.prolific_session_id
+                        FROM sessions s
+                        LEFT JOIN participants p ON p.session_id = s.session_id
+                        ORDER BY s.session_code, p.participant_code
+                    """)
+                    
+                    all_data = cur.fetchall()
+                    
+                    # Group by session
+                    sessions_dict = {}
+                    for row in all_data:
+                        session_code = row['session_code']
+                        if session_code not in sessions_dict:
+                            sessions_dict[session_code] = {
+                                'session_code': session_code,
+                                'experiment_type': row['experiment_type'],
+                                'session_status': row['session_status'],
+                                'participants': [],
+                                'issues': []
+                            }
+                        
+                        if row['participant_code']:
+                            sessions_dict[session_code]['participants'].append({
+                                'participant_code': row['participant_code'],
+                                'participant_type': row['participant_type'],
+                                'is_agent': row['is_agent'],
+                                'prolific_pid': row['prolific_pid'],
+                                'prolific_study_id': row['prolific_study_id'],
+                                'prolific_session_id': row['prolific_session_id']
+                            })
+                    
+                    # Check each session for issues
+                    for session_code, session_data in sessions_dict.items():
+                        session_issues = []
+                        
+                        # Check session-level issues
+                        if session_data['experiment_type'] != 'hiddenprofiles':
+                            session_issues.append(f"experiment_type='{session_data['experiment_type']}' (needs 'hiddenprofiles')")
+                        
+                        if session_data['session_status'] != 'idle':
+                            session_issues.append(f"session_status='{session_data['session_status']}' (needs 'idle')")
+                        
+                        # Check participants
+                        human_participants = [p for p in session_data['participants'] 
+                                            if p['participant_type'] == 'human' and not p['is_agent']]
+                        
+                        if not human_participants:
+                            session_issues.append("no human participant found (needs participant_type='human' AND is_agent=false)")
+                        else:
+                            unassigned_humans = [p for p in human_participants if p['prolific_pid'] is None]
+                            if not unassigned_humans:
+                                session_issues.append(f"all human participants already assigned to Prolific participants")
+                                for p in human_participants:
+                                    if p['prolific_pid']:
+                                        session_issues.append(f"  - {p['participant_code']} assigned to prolific_pid '{p['prolific_pid']}'")
+                        
+                        session_data['issues'] = session_issues
+                        error_details['diagnostics']['sessions'].append(session_data)
+                        
+                        # Log issues for this session
+                        if session_issues:
+                            logger.warning(f"[PROLIFIC] Session '{session_code}' issues: {'; '.join(session_issues)}")
+                        else:
+                            logger.info(f"[PROLIFIC] Session '{session_code}' appears ready but was not selected")
+                    
+                    logger.error(f"[PROLIFIC] Assignment failed for prolific_pid {prolific_pid}. Details: {len(sessions_dict)} sessions checked")
+                    return jsonify(error_details), 404
+                
+                session_id = assignment['session_id']
+                session_code = assignment['session_code']
+                participant_id = assignment['participant_id']
+                participant_code = assignment['participant_code']
+                
+                # 3. update the participant's Prolific information
+                cur.execute("""
+                    UPDATE participants 
+                    SET prolific_pid = %s,
+                        prolific_study_id = %s,
+                        prolific_session_id = %s
+                    WHERE participant_id = %s
+                    RETURNING participant_id
+                """, (
+                    prolific_pid,
+                    study_id,
+                    prolific_session_id,
+                    participant_id
+                ))
+                
+                updated = cur.fetchone()
+                if not updated:
+                    conn.rollback()
+                    return jsonify({
+                        'success': False,
+                        'error': 'Failed to update participant Prolific information'
+                    }), 500
+                
+                conn.commit()
+                
+                logger.info(f"Prolific participant {prolific_pid} assigned to hiddenprofiles session {session_code}, participant {participant_code}")
+                
+                return jsonify({
+                    'success': True,
+                    'session_code': session_code,
+                    'session_id': str(session_id),
+                    'participant_code': participant_code,
+                    'participant_id': str(participant_id),
+                    'already_assigned': False,
+                    'message': 'Successfully assigned to session'
+                })
+                
+    except Exception as e:
+        logger.error(f"Error in assign_hiddenprofile_for_prolific: {e}")
+        import traceback
+        error_traceback = traceback.format_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'traceback': error_traceback
+        }), 500
+
+@app.route('/api/prolific/auto-login-hiddenprofile', methods=['POST'])
+def auto_login_hiddenprofile_for_prolific():
+    """
+    auto login for an assigned Prolific participant
+    """
+    try:
+        data = request.get_json() or {}
+        prolific_pid = data.get('prolificPid') or request.args.get('PROLIFIC_PID')
+        study_id = data.get('studyId') or request.args.get('STUDY_ID')
+        prolific_session_id = data.get('prolificSessionId') or request.args.get('SESSION_ID')
+        
+        if not prolific_pid or not study_id or not prolific_session_id:
+            return jsonify({
+                'success': False,
+                'error': 'PROLIFIC_PID, STUDY_ID, and SESSION_ID are required'
+            }), 400
+        
+        # find the participant
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        
+        cur.execute("""
+            SELECT p.*, s.session_code
+            FROM participants p
+            JOIN sessions s ON p.session_id = s.session_id
+            WHERE p.prolific_pid = %s
+            AND p.prolific_study_id = %s
+            AND p.prolific_session_id = %s
+            AND s.experiment_type = 'hiddenprofiles'
+        """, (prolific_pid, study_id, prolific_session_id))
+        
+        participant = cur.fetchone()
+        
+        if not participant:
+            cur.close()
+            return_db_connection(conn)
+            return jsonify({
+                'success': False,
+                'error': 'Participant not found. Please assign first.'
+            }), 404
+        
+        session_code = participant['session_code']
+        participant_code = participant['participant_code']
+        
+        # generate JWT token
+        token_payload = {
+            'participant_code': participant_code,
+            'session_code': session_code,
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }
+        
+        token = jwt.encode(token_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        
+        # update the login status
+        cur.execute("""
+            UPDATE participants 
+            SET login_status = 'active', last_activity = %s
+            WHERE participant_code = %s AND session_code = %s
+        """, (datetime.now(timezone.utc), participant_code, session_code))
+        
+        conn.commit()
+        cur.close()
+        return_db_connection(conn)
+        
+        # log the login
+        session_id = participant['session_id']
+        logger_obj = get_human_logger(participant_code, session_id, session_code)
+        logger_obj.log_login(session_code)
+        
+        return jsonify({
+            'success': True,
+            'token': token,
+            'participant': dict(participant),
+            'session': {
+                'session_code': session_code,
+                'session_id': str(participant['session_id'])
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in auto_login_hiddenprofile_for_prolific: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# ============================================================================
+# HIDDEN PROFILES API ENDPOINTS
+# ============================================================================
+
+@app.route('/api/hiddenprofiles/assign-public-info', methods=['POST'])
+def assign_public_info():
+    """Assign public information document to a Hidden Profiles session"""
+    try:
+        from pdf_utils import extract_text_from_pdf
+        
+        # Check if this is a file upload (FormData) or JSON request
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            session_code = request.form.get('session_code')
+            public_info_metadata_json = request.form.get('public_info_metadata')
+            public_info_file = request.files.get('public_info_file')
+            
+            if not session_code:
+                return jsonify({"error": "Session code required"}), 400
+            
+            # Get session_id
+            with DatabaseConnection() as conn:
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute("SELECT session_id, experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+                session_result = cur.fetchone()
+                
+                if not session_result:
+                    return jsonify({"error": "Session not found"}), 404
+                
+                session_id = session_result['session_id']
+                experiment_config = session_result['experiment_config'] or {}
+                
+                # Check experiment type
+                cur.execute("SELECT experiment_type FROM sessions WHERE session_code = %s", (session_code,))
+                exp_type_result = cur.fetchone()
+                if not exp_type_result or exp_type_result['experiment_type'] != 'hiddenprofiles':
+                    return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+                
+                # Process public info if provided
+                if public_info_metadata_json and public_info_file:
+                    try:
+                        public_info_metadata = json.loads(public_info_metadata_json)
+                    except json.JSONDecodeError:
+                        return jsonify({"error": "Invalid public info metadata JSON"}), 400
+                    
+                    # Save PDF file to disk
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    uploads_dir = os.path.join(base_dir, 'uploads', 'hiddenprofiles', session_code)
+                    os.makedirs(uploads_dir, exist_ok=True)
+                    
+                    # Generate unique filename
+                    doc_id = public_info_metadata.get('doc_id', str(uuid.uuid4()))
+                    original_filename = public_info_metadata.get('filename', 'document.pdf')
+                    file_extension = os.path.splitext(original_filename)[1] or '.pdf'
+                    saved_filename = f"{doc_id}{file_extension}"
+                    file_path = os.path.join(uploads_dir, saved_filename)
+                    
+                    # Save the file
+                    public_info_file.seek(0)
+                    public_info_file.save(file_path)
+                    
+                    # Extract text from PDF
+                    public_info_file.seek(0)
+                    extracted_text = extract_text_from_pdf(public_info_file)
+                    
+                    # Store in experiment_config with file URL
+                    if 'hiddenProfiles' not in experiment_config:
+                        experiment_config['hiddenProfiles'] = {}
+                    
+                    experiment_config['hiddenProfiles']['publicInfo'] = {
+                        'doc_id': doc_id,
+                        'title': public_info_metadata.get('title'),
+                        'filename': original_filename,
+                        'content': extracted_text or '',
+                        'file_url': f'/api/hiddenprofiles/get-document/{session_code}/{doc_id}',
+                        'saved_filename': saved_filename,
+                        'uploaded_at': datetime.now(timezone.utc).isoformat()
+                    }
+                    
+                    # Update experiment_config in database
+                    cur.execute("""
+                        UPDATE sessions 
+                        SET experiment_config = %s 
+                        WHERE session_code = %s
+                    """, (json.dumps(experiment_config), session_code))
+                    conn.commit()
+                    
+                    # Check if reading phase is now complete and trigger agents
+                    _check_and_trigger_agents_for_reading_phase(session_code)
+                    
+                    return jsonify({
+                        "success": True,
+                        "message": "Public information assigned successfully",
+                        "public_info": experiment_config['hiddenProfiles']['publicInfo']
+                    })
+                else:
+                    # Clear public info if no file provided
+                    if 'hiddenProfiles' in experiment_config:
+                        experiment_config['hiddenProfiles'].pop('publicInfo', None)
+                        cur.execute("""
+                            UPDATE sessions 
+                            SET experiment_config = %s 
+                            WHERE session_code = %s
+                        """, (json.dumps(experiment_config), session_code))
+                        conn.commit()
+                    
+                    return jsonify({
+                        "success": True,
+                        "message": "Public information cleared"
+                    })
+        else:
+            return jsonify({"error": "FormData with file upload required"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error assigning public information: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/assign-candidate-docs', methods=['POST'])
+def assign_candidate_docs():
+    """Assign candidate documents to a Hidden Profiles session"""
+    try:
+        from pdf_utils import extract_text_from_pdf
+        
+        # Check if this is a file upload (FormData) or JSON request
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            session_code = request.form.get('session_code')
+            candidate_docs_metadata_json = request.form.get('candidate_docs_metadata')
+            
+            if not session_code:
+                return jsonify({"error": "Session code required"}), 400
+            
+            # Get session_id
+            with DatabaseConnection() as conn:
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute("SELECT session_id, experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+                session_result = cur.fetchone()
+                
+                if not session_result:
+                    return jsonify({"error": "Session not found"}), 404
+                
+                session_id = session_result['session_id']
+                experiment_config = session_result['experiment_config'] or {}
+                
+                # Check experiment type
+                cur.execute("SELECT experiment_type FROM sessions WHERE session_code = %s", (session_code,))
+                exp_type_result = cur.fetchone()
+                if not exp_type_result or exp_type_result['experiment_type'] != 'hiddenprofiles':
+                    return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+                
+                if not candidate_docs_metadata_json:
+                    return jsonify({"error": "Candidate docs metadata required"}), 400
+                
+                try:
+                    candidate_docs_metadata = json.loads(candidate_docs_metadata_json)
+                except json.JSONDecodeError:
+                    return jsonify({"error": "Invalid candidate docs metadata JSON"}), 400
+                
+                # Get existing candidate docs to preserve file data
+                existing_candidate_docs = experiment_config.get('hiddenProfiles', {}).get('candidateDocs', [])
+                existing_docs_map = {doc.get('doc_id'): doc for doc in existing_candidate_docs}
+                
+                # Process uploaded files
+                candidate_docs = []
+                file_index = 0
+                
+                # Create uploads directory for this session
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                uploads_dir = os.path.join(base_dir, 'uploads', 'hiddenprofiles', session_code)
+                os.makedirs(uploads_dir, exist_ok=True)
+                
+                for doc_meta in candidate_docs_metadata:
+                    doc_id = doc_meta['doc_id']
+                    doc_data = {
+                        'doc_id': doc_id,
+                        'title': doc_meta['title'],
+                        'filename': doc_meta['filename']
+                    }
+                    
+                    # Check if this document already exists - preserve existing file data
+                    existing_doc = existing_docs_map.get(doc_id)
+                    if existing_doc:
+                        # Preserve existing file information
+                        if existing_doc.get('saved_filename'):
+                            doc_data['saved_filename'] = existing_doc['saved_filename']
+                        if existing_doc.get('file_url'):
+                            doc_data['file_url'] = existing_doc['file_url']
+                        if existing_doc.get('content'):
+                            doc_data['content'] = existing_doc['content']
+                    
+                    # Look for corresponding file (new upload)
+                    file_key = f'candidate_doc_file_{file_index}'
+                    if file_key in request.files:
+                        doc_file = request.files[file_key]
+                        if doc_file and doc_file.filename:
+                            # Save PDF file to disk
+                            original_filename = doc_meta['filename']
+                            file_extension = os.path.splitext(original_filename)[1] or '.pdf'
+                            saved_filename = f"{doc_id}{file_extension}"
+                            file_path = os.path.join(uploads_dir, saved_filename)
+                            
+                            # Save the file
+                            doc_file.seek(0)
+                            doc_file.save(file_path)
+                            
+                            # Extract text from PDF
+                            doc_file.seek(0)
+                            extracted_text = extract_text_from_pdf(doc_file)
+                            
+                            # Overwrite with new file data
+                            doc_data['content'] = extracted_text or ''
+                            doc_data['file_url'] = f'/api/hiddenprofiles/get-document/{session_code}/{doc_id}'
+                            doc_data['saved_filename'] = saved_filename
+                    elif not existing_doc:
+                        # New document without file - set default file_url
+                        doc_data['file_url'] = f'/api/hiddenprofiles/get-document/{session_code}/{doc_id}'
+                    
+                    candidate_docs.append(doc_data)
+                    file_index += 1
+                
+                # Store in experiment_config
+                if 'hiddenProfiles' not in experiment_config:
+                    experiment_config['hiddenProfiles'] = {}
+                
+                experiment_config['hiddenProfiles']['candidateDocs'] = candidate_docs
+                experiment_config['hiddenProfiles']['candidateDocsUpdatedAt'] = datetime.now(timezone.utc).isoformat()
+                
+                # Update experiment_config in database
+                cur.execute("""
+                    UPDATE sessions 
+                    SET experiment_config = %s 
+                    WHERE session_code = %s
+                """, (json.dumps(experiment_config), session_code))
+                conn.commit()
+                
+                # Check if reading phase is now complete and trigger agents
+                _check_and_trigger_agents_for_reading_phase(session_code)
+                
+                return jsonify({
+                    "success": True,
+                    "message": f"Successfully assigned {len(candidate_docs)} candidate documents",
+                    "docs_assigned": len(candidate_docs),
+                    "candidate_docs": candidate_docs
+                })
+        else:
+            return jsonify({"error": "FormData with file upload required"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error assigning candidate documents: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/get-candidate-names', methods=['GET'])
+def get_hiddenprofiles_candidate_names():
+    """Get candidate display names for a Hidden Profiles session"""
+    try:
+        session_code = request.args.get('session_code')
+        
+        if not session_code:
+            return jsonify({"error": "Session code required"}), 400
+        
+        with DatabaseConnection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            cur.execute("SELECT experiment_type, experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+            session_row = cur.fetchone()
+            if not session_row:
+                return jsonify({"error": "Session not found"}), 404
+            
+            if session_row['experiment_type'] != 'hiddenprofiles':
+                return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+            
+            experiment_config = session_row['experiment_config'] or {}
+            candidate_names = experiment_config.get('hiddenProfiles', {}).get('candidateNames', [])
+            
+            logger.info(f"Retrieved candidate names for session {session_code}: {candidate_names}")
+            
+        return jsonify({
+            "success": True,
+            "candidate_names": candidate_names,
+            "session_code": session_code
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting candidate names: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/set-candidate-names', methods=['POST'])
+def set_hiddenprofiles_candidate_names():
+    """Set candidate display names for a Hidden Profiles session"""
+    try:
+        data = request.get_json() or {}
+        session_code = data.get('session_code')
+        candidate_names = data.get('candidate_names', [])
+
+        if not session_code:
+            return jsonify({"error": "Session code required"}), 400
+
+        if not isinstance(candidate_names, list):
+            return jsonify({"error": "candidate_names must be a list of strings"}), 400
+
+        # Normalize and filter names
+        normalized_names = [str(name).strip() for name in candidate_names if str(name).strip()]
+
+        with DatabaseConnection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            cur.execute("SELECT experiment_type, experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+            session_row = cur.fetchone()
+            if not session_row:
+                return jsonify({"error": "Session not found"}), 404
+
+            if session_row['experiment_type'] != 'hiddenprofiles':
+                return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+
+            experiment_config = session_row['experiment_config'] or {}
+            if 'hiddenProfiles' not in experiment_config:
+                experiment_config['hiddenProfiles'] = {}
+
+            # Verify we're updating the correct session
+            logger.info(f"Setting candidate names for session {session_code}: {normalized_names}")
+            
+            experiment_config['hiddenProfiles']['candidateNames'] = normalized_names
+
+            cur.execute(
+                """
+                UPDATE sessions
+                SET experiment_config = %s
+                WHERE session_code = %s
+                """,
+                (json.dumps(experiment_config), session_code)
+            )
+            conn.commit()
+            
+            # Verify the update
+            cur.execute("SELECT experiment_config->'hiddenProfiles'->>'candidateNames' as names FROM sessions WHERE session_code = %s", (session_code,))
+            verify_row = cur.fetchone()
+            logger.info(f"Verified candidate names for session {session_code}: {verify_row.get('names') if verify_row else 'None'}")
+
+        return jsonify({
+            "success": True,
+            "candidate_names": normalized_names,
+            "session_code": session_code
+        })
+
+    except Exception as e:
+        logger.error(f"Error setting candidate names: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/update-participant-initiative', methods=['POST'])
+def update_participant_initiative():
+    """Update participant initiative (Active/Passive) for Hidden Profiles experiment"""
+    try:
+        data = request.get_json()
+        session_code = data.get('session_code')
+        participant_id = data.get('participant_id')
+        initiative = data.get('initiative')
+        
+        if not session_code:
+            return jsonify({"error": "Session code required"}), 400
+        
+        if not participant_id:
+            return jsonify({"error": "Participant ID required"}), 400
+        
+        if not initiative or initiative not in ['active', 'passive']:
+            return jsonify({"error": "Initiative must be 'active' or 'passive'"}), 400
+        
+        # Check experiment type
+        with DatabaseConnection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("SELECT experiment_type FROM sessions WHERE session_code = %s", (session_code,))
+            exp_type_result = cur.fetchone()
+            if not exp_type_result or exp_type_result['experiment_type'] != 'hiddenprofiles':
+                return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+            
+            # Get participant by participant_code (since participant_id might be the code)
+            logger.info(f"Looking up participant: participant_id={participant_id}, session_code={session_code}")
+            cur.execute("""
+                SELECT participant_id, participant_code FROM participants 
+                WHERE (participant_code = %s OR participant_id::text = %s) 
+                AND session_code = %s
+            """, (participant_id, participant_id, session_code))
+            
+            participant = cur.fetchone()
+            if not participant:
+                # Log available participants for debugging
+                cur.execute("""
+                    SELECT participant_id, participant_code FROM participants 
+                    WHERE session_code = %s
+                """, (session_code,))
+                all_participants = cur.fetchall()
+                logger.warning(f"Participant not found. Available participants in session {session_code}: {[p['participant_code'] for p in all_participants]}")
+                return jsonify({
+                    "error": f"Participant '{participant_id}' not found in session '{session_code}'",
+                    "available_participants": [p['participant_code'] for p in all_participants] if all_participants else []
+                }), 404
+            
+            # Store initiative in experiment_config or as a JSONB field
+            # For now, we'll store it in a JSONB field on participants table if it exists
+            # Otherwise, we'll store it in the session's experiment_config
+            cur.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'participants' AND column_name = 'initiative'
+            """)
+            has_initiative_column = cur.fetchone() is not None
+            
+            if has_initiative_column:
+                cur.execute("""
+                    UPDATE participants 
+                    SET initiative = %s 
+                    WHERE participant_id = %s
+                """, (initiative, participant['participant_id']))
+            else:
+                # Store in experiment_config as fallback
+                cur.execute("SELECT experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+                session_result = cur.fetchone()
+                experiment_config = session_result['experiment_config'] or {} if session_result else {}
+                
+                if 'hiddenProfiles' not in experiment_config:
+                    experiment_config['hiddenProfiles'] = {}
+                if 'participantInitiatives' not in experiment_config['hiddenProfiles']:
+                    experiment_config['hiddenProfiles']['participantInitiatives'] = {}
+                
+                # Save initiative with both isolated name and base name for reliable lookup
+                participant_code = participant['participant_code']
+                experiment_config['hiddenProfiles']['participantInitiatives'][participant_code] = initiative
+                
+                # Also save with base name (without session suffix) as fallback
+                base_code = participant_code.rsplit('_', 1)[0] if '_' in participant_code else participant_code
+                if base_code != participant_code:
+                    experiment_config['hiddenProfiles']['participantInitiatives'][base_code] = initiative
+                
+                cur.execute("""
+                    UPDATE sessions 
+                    SET experiment_config = %s 
+                    WHERE session_code = %s
+                """, (json.dumps(experiment_config), session_code))
+                
+                # Update running agent's is_passive flag if agent is already running
+                agent_key = f"{session_code}:{participant_code}" if session_code else participant_code
+                agent_info = AGENT_THREADS.get(agent_key)
+                if agent_info and agent_info.get('controller'):
+                    agent_info['controller'].is_passive = (initiative == 'passive')
+                    print(f"[INITIATIVE UPDATE] Updated running agent {participant_code} is_passive to {agent_info['controller'].is_passive}")
+            
+            conn.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": f"Participant initiative updated to {initiative}",
+                "participant_code": participant['participant_code'],
+                "initiative": initiative
+            })
+            
+    except Exception as e:
+        logger.error(f"Error updating participant initiative: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/update-participant-candidate-doc', methods=['POST'])
+def update_participant_candidate_doc():
+    """Update participant candidate document assignment for Hidden Profiles experiment"""
+    try:
+        data = request.get_json()
+        session_code = data.get('session_code')
+        participant_id = data.get('participant_id')
+        candidate_document_id = data.get('candidate_document_id')
+        
+        if not session_code:
+            return jsonify({"error": "Session code required"}), 400
+        
+        if not participant_id:
+            return jsonify({"error": "Participant ID required"}), 400
+        
+        if not candidate_document_id:
+            return jsonify({"error": "Candidate document ID required"}), 400
+        
+        # Check experiment type
+        with DatabaseConnection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("SELECT experiment_type FROM sessions WHERE session_code = %s", (session_code,))
+            exp_type_result = cur.fetchone()
+            if not exp_type_result or exp_type_result['experiment_type'] != 'hiddenprofiles':
+                return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+            
+            # Get participant
+            logger.info(f"Looking up participant for candidate doc: participant_id={participant_id}, session_code={session_code}")
+            cur.execute("""
+                SELECT participant_id, participant_code FROM participants 
+                WHERE (participant_code = %s OR participant_id::text = %s) 
+                AND session_code = %s
+            """, (participant_id, participant_id, session_code))
+            
+            participant = cur.fetchone()
+            if not participant:
+                # Log available participants for debugging
+                cur.execute("""
+                    SELECT participant_id, participant_code FROM participants 
+                    WHERE session_code = %s
+                """, (session_code,))
+                all_participants = cur.fetchall()
+                logger.warning(f"Participant not found. Available participants in session {session_code}: {[p['participant_code'] for p in all_participants]}")
+                return jsonify({
+                    "error": f"Participant '{participant_id}' not found in session '{session_code}'",
+                    "available_participants": [p['participant_code'] for p in all_participants] if all_participants else []
+                }), 404
+            
+            # Check if candidate_document_id exists in session's candidate docs
+            cur.execute("SELECT experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+            session_result = cur.fetchone()
+            if not session_result:
+                logger.error(f"Session {session_code} not found")
+                return jsonify({"error": f"Session '{session_code}' not found"}), 404
+            
+            experiment_config = session_result['experiment_config'] or {}
+            
+            # Ensure hiddenProfiles config exists
+            if 'hiddenProfiles' not in experiment_config:
+                experiment_config['hiddenProfiles'] = {}
+            
+            candidate_docs = experiment_config.get('hiddenProfiles', {}).get('candidateDocs', [])
+            
+            # Log for debugging
+            logger.info(f"Checking candidate document: candidate_document_id={candidate_document_id}, "
+                       f"total_candidate_docs={len(candidate_docs)}, session_code={session_code}")
+            
+            if not candidate_docs or len(candidate_docs) == 0:
+                logger.warning(f"No candidate documents found in session {session_code}. "
+                              f"hiddenProfiles config keys: {list(experiment_config.get('hiddenProfiles', {}).keys())}")
+                return jsonify({
+                    "error": "No candidate documents found in session. Please upload candidate documents first.",
+                    "candidate_document_id": candidate_document_id,
+                    "session_code": session_code,
+                    "hint": "Use the 'Assign Candidate Documents' button to upload documents first."
+                }), 404
+            
+            # Log available doc IDs for debugging
+            available_doc_ids = [doc.get('doc_id') for doc in candidate_docs if doc.get('doc_id')]
+            logger.info(f"Available candidate doc IDs: {available_doc_ids}")
+            
+            # Check if document exists (handle both string and numeric comparisons)
+            doc_exists = False
+            matching_doc = None
+            for doc in candidate_docs:
+                doc_id = doc.get('doc_id')
+                if not doc_id:
+                    continue
+                # Try both string and numeric comparison
+                if str(doc_id) == str(candidate_document_id) or doc_id == candidate_document_id:
+                    doc_exists = True
+                    matching_doc = doc
+                    logger.info(f"Found matching candidate document: doc_id={doc_id}, title={doc.get('title', 'N/A')}")
+                    break
+            
+            if not doc_exists:
+                logger.error(f"Candidate document '{candidate_document_id}' not found in session '{session_code}'. "
+                           f"Available doc IDs: {available_doc_ids}, "
+                           f"Requested ID type: {type(candidate_document_id).__name__}")
+                return jsonify({
+                    "error": "Candidate document not found in session",
+                    "candidate_document_id": candidate_document_id,
+                    "available_doc_ids": available_doc_ids,
+                    "total_docs": len(candidate_docs),
+                    "hint": f"Make sure the document ID matches one of the uploaded candidate documents."
+                }), 404
+            
+            # Store assignment in experiment_config
+            if 'hiddenProfiles' not in experiment_config:
+                experiment_config['hiddenProfiles'] = {}
+            if 'participantCandidateDocs' not in experiment_config['hiddenProfiles']:
+                experiment_config['hiddenProfiles']['participantCandidateDocs'] = {}
+            
+            experiment_config['hiddenProfiles']['participantCandidateDocs'][participant['participant_code']] = candidate_document_id
+            
+            cur.execute("""
+                UPDATE sessions 
+                SET experiment_config = %s 
+                WHERE session_code = %s
+            """, (json.dumps(experiment_config), session_code))
+            
+            conn.commit()
+            
+            # Check if reading phase is now complete and trigger agents
+            _check_and_trigger_agents_for_reading_phase(session_code)
+            
+            return jsonify({
+                "success": True,
+                "message": "Participant candidate document assigned successfully",
+                "participant_code": participant['participant_code'],
+                "candidate_document_id": candidate_document_id
+            })
+            
+    except Exception as e:
+        logger.error(f"Error updating participant candidate document: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/submit-vote', methods=['POST'])
+def submit_hiddenprofiles_vote():
+    """Submit a vote for a candidate name in Hidden Profiles experiment"""
+    try:
+        data = request.get_json()
+        participant_code = data.get('participant_code')
+        session_code = data.get('session_code')
+        candidate_name = data.get('candidate_name')
+        
+        if not participant_code:
+            return jsonify({"error": "Participant code required"}), 400
+        
+        if not session_code:
+            return jsonify({"error": "Session code required"}), 400
+        
+        if not candidate_name:
+            return jsonify({"error": "Candidate name required"}), 400
+        
+        # Get the appropriate game engine
+        session_config = get_session_config(session_code)
+        experiment_type = session_config.get('experiment_type', 'shapefactory')
+        
+        if experiment_type != 'hiddenprofiles':
+            return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+        
+        # Check if this is a human participant
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT participant_type 
+            FROM participants 
+            WHERE participant_code = %s AND session_code = %s
+        """, (participant_code, session_code))
+        participant = cur.fetchone()
+        cur.close()
+        return_db_connection(conn)
+        
+        is_human = participant and participant.get('participant_type') == 'human'
+        
+        # Determine if this is initial or final vote BEFORE submitting
+        vote_type = "INITIAL"
+        if is_human:
+            try:
+                # Check if participant has voted before
+                conn = get_db_connection()
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute("""
+                    SELECT experiment_config FROM sessions WHERE session_code = %s
+                """, (session_code,))
+                session_result = cur.fetchone()
+                
+                if session_result and session_result.get('experiment_config'):
+                    import json
+                    experiment_config = session_result['experiment_config']
+                    if isinstance(experiment_config, str):
+                        experiment_config = json.loads(experiment_config)
+                    hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+                    votes = hidden_profiles_config.get('votes', {})
+                    # Check if this participant has already voted
+                    if participant_code in votes:
+                        vote_type = "FINAL"
+                
+                cur.close()
+                return_db_connection(conn)
+            except Exception as e:
+                print(f"⚠️ Warning: Could not determine vote type for {participant_code}: {e}")
+        
+        game_engine = get_game_engine(experiment_type)
+        result = game_engine.submit_vote(participant_code, candidate_name, session_code)
+        
+        # Log vote for human participants
+        if is_human:
+            try:
+                # Get session_id for logging
+                session_id = get_participant_session_id(participant_code, session_code)
+                logger = get_human_logger(participant_code, session_id, session_code)
+                
+                # Log the vote
+                details = {
+                    "participant_code": participant_code,
+                    "candidate_name": candidate_name,
+                    "vote_type": vote_type,
+                    "session_code": session_code
+                }
+                logger.log_action("submit_vote", result.get('success', False), 
+                                result.get('error') if not result.get('success') else None, 
+                                details)
+                
+                if result.get('success'):
+                    logger.log(f"📊 {vote_type} VOTE: {participant_code} submitted vote for candidate: {candidate_name}")
+            except Exception as e:
+                print(f"⚠️ Warning: Could not log vote for human participant {participant_code}: {e}")
+                import traceback
+                print(traceback.format_exc())
+        
+        # If this is the first human vote, activate agents
+        if is_human and result.get('success'):
+            try:
+                # Check if any agents have been activated yet
+                conn = get_db_connection()
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                
+                # Check if there are any active agent threads for this session
+                # AGENT_THREADS is defined in this file (app.py)
+                agents_activated = False
+                cur.execute("""
+                    SELECT participant_code 
+                    FROM participants 
+                    WHERE session_code = %s AND participant_type = 'ai_agent'
+                """, (session_code,))
+                agents = cur.fetchall()
+                cur.close()
+                return_db_connection(conn)
+                
+                # Check if any agents are already running
+                for agent in agents:
+                    agent_key = f"{session_code}:{agent['participant_code']}"
+                    if agent_key in AGENT_THREADS and AGENT_THREADS[agent_key]['thread'].is_alive():
+                        agents_activated = True
+                        break
+                
+                # If no agents are running yet, activate them now
+                if not agents_activated and len(agents) > 0:
+                    print(f"🚀 First human vote submitted by {participant_code}. Starting experiment and activating agents for session {session_code}...")
+                    
+                    # First, ensure the experiment is started (for Hidden Profiles, it might not be started yet)
+                    session_timer_state = get_timer_state(session_code)
+                    if session_timer_state['experiment_status'] != 'running':
+                        print(f"📋 Experiment status is '{session_timer_state['experiment_status']}'. Starting experiment now...")
+                        
+                        # Set session_started_at in database when first vote is submitted
+                        from datetime import datetime, timezone
+                        vote_submit_time = datetime.now(timezone.utc)
+                        
+                        try:
+                            conn = get_db_connection()
+                            cur = conn.cursor()
+                            cur.execute("""
+                                UPDATE sessions 
+                                SET session_status = 'session_active',
+                                    session_started_at = %s
+                                WHERE session_code = %s
+                            """, (vote_submit_time, session_code))
+                            conn.commit()
+                            cur.close()
+                            return_db_connection(conn)
+                            print(f"✅ Set session_started_at to {vote_submit_time.isoformat()} for session {session_code} (when first vote was submitted)")
+                        except Exception as e:
+                            print(f"⚠️ Warning: Could not set session_started_at: {e}")
+                        
+                        # Get session configuration
+                        session_config = get_session_config(session_code)
+                        session_duration = session_config.get('sessionDuration', 15)
+                        
+                        # Initialize timer state for this session
+                        initialize_timer_state(session_code)
+                        timer_state = get_timer_state(session_code)
+                        
+                        # Update experiment status to running
+                        timer_state['experiment_status'] = 'running'
+                        timer_state['round_duration_minutes'] = session_duration
+                        timer_state['time_remaining'] = session_duration * 60
+                        timer_state['timer_active'] = True
+                        timer_state['round_start_time'] = vote_submit_time.isoformat()  # Store start time when vote was submitted
+                        
+                        print(f"✅ Timer state updated: status=running, time_remaining={timer_state['time_remaining']}, round_start_time={timer_state['round_start_time']}")
+                        
+                        # Start session-specific timer
+                        start_session_timer(session_code)
+                        print(f"✅ Experiment started with {session_duration} minutes duration (timer started when human submitted first vote)")
+                        
+                        # Broadcast timer update to all clients
+                        broadcast_timer_update(session_code)
+                        
+                        # Broadcast experiment_started event
+                        socketio.emit('experiment_started', {
+                            'experiment_status': 'running',
+                            'session_code': session_code,
+                            'timer_state': timer_state
+                        }, room=f'session_{session_code}')
+                        socketio.emit('experiment_started', {
+                            'experiment_status': 'running',
+                            'session_code': session_code,
+                            'timer_state': timer_state
+                        }, room='researcher')
+                        socketio.emit('experiment_started', {
+                            'experiment_status': 'running',
+                            'session_code': session_code,
+                            'timer_state': timer_state
+                        })
+                        print("✅ Experiment started event broadcasted to all clients")
+                    
+                    # Mark agents as active
+                    for agent in agents:
+                        try:
+                            conn = get_db_connection()
+                            cur = conn.cursor()
+                            cur.execute("""
+                                UPDATE participants 
+                                SET login_status = 'active', last_activity = %s
+                                WHERE participant_code = %s AND session_code = %s
+                            """, (datetime.now(timezone.utc), agent['participant_code'], session_code))
+                            conn.commit()
+                            cur.close()
+                            return_db_connection(conn)
+                            print(f"✅ Agent {agent['participant_code']} marked active")
+                        except Exception as e:
+                            print(f"❌ Error marking agent {agent['participant_code']} active: {e}")
+                    
+                    # Start agent loops (experiment should be running now)
+                    session_timer_state = get_timer_state(session_code)
+                    if session_timer_state['experiment_status'] == 'running':
+                        activation_result = activate_agents_for_session(session_code, use_memory=True)
+                        print(f"✅ Agents activated: {activation_result}")
+                    else:
+                        print(f"⚠️ Warning: Experiment status is '{session_timer_state['experiment_status']}', not 'running'. Agents may not work correctly.")
+                elif agents_activated:
+                    print(f"ℹ️ Agents already activated for session {session_code}")
+                    
+            except Exception as e:
+                print(f"⚠️ Error activating agents after first human vote: {e}")
+                # Don't fail the vote submission if agent activation fails
+                import traceback
+                traceback.print_exc()
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error submitting vote: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/get-assigned-documents', methods=['GET'])
+def get_hiddenprofiles_assigned_documents():
+    """Get assigned documents (public info + candidate doc) for a participant"""
+    try:
+        participant_code = request.args.get('participant_code')
+        session_code = request.args.get('session_code')
+        
+        if not participant_code:
+            return jsonify({"error": "Participant code required"}), 400
+        
+        if not session_code:
+            return jsonify({"error": "Session code required"}), 400
+        
+        # Get the appropriate game engine
+        session_config = get_session_config(session_code)
+        experiment_type = session_config.get('experiment_type', 'shapefactory')
+        
+        if experiment_type != 'hiddenprofiles':
+            return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+        
+        game_engine = get_game_engine(experiment_type)
+        result = game_engine.get_assigned_documents(participant_code, session_code)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error getting assigned documents: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/hiddenprofiles/get-document/<session_code>/<doc_id>', methods=['GET'])
+def get_hiddenprofiles_document(session_code, doc_id):
+    """Serve a PDF document file for Hidden Profiles experiment"""
+    try:
+        # Verify session exists and is hiddenprofiles type
+        with DatabaseConnection() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("SELECT experiment_type FROM sessions WHERE session_code = %s", (session_code,))
+            session_result = cur.fetchone()
+            
+            if not session_result:
+                return jsonify({"error": "Session not found"}), 404
+            
+            if session_result['experiment_type'] != 'hiddenprofiles':
+                return jsonify({"error": "This endpoint is only for Hidden Profiles experiments"}), 400
+            
+            # Get document info from experiment_config
+            cur.execute("SELECT experiment_config FROM sessions WHERE session_code = %s", (session_code,))
+            session_row = cur.fetchone()
+            experiment_config = session_row['experiment_config'] or {} if session_row else {}
+            hidden_profiles_config = experiment_config.get('hiddenProfiles', {})
+            
+            # Check if it's public info
+            public_info = hidden_profiles_config.get('publicInfo')
+            if public_info and public_info.get('doc_id') == doc_id:
+                saved_filename = public_info.get('saved_filename')
+                if saved_filename:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    file_path = os.path.join(base_dir, 'uploads', 'hiddenprofiles', session_code, saved_filename)
+                    if os.path.exists(file_path):
+                        return send_from_directory(
+                            os.path.dirname(file_path),
+                            saved_filename,
+                            as_attachment=False,
+                            mimetype='application/pdf'
+                        )
+            
+            # Check if it's a candidate doc
+            candidate_docs = hidden_profiles_config.get('candidateDocs', [])
+            for doc in candidate_docs:
+                if doc.get('doc_id') == doc_id:
+                    saved_filename = doc.get('saved_filename')
+                    if saved_filename:
+                        base_dir = os.path.dirname(os.path.abspath(__file__))
+                        file_path = os.path.join(base_dir, 'uploads', 'hiddenprofiles', session_code, saved_filename)
+                        if os.path.exists(file_path):
+                            return send_from_directory(
+                                os.path.dirname(file_path),
+                                saved_filename,
+                                as_attachment=False,
+                                mimetype='application/pdf'
+                            )
+            
+            return jsonify({"error": "Document not found"}), 404
+            
+    except Exception as e:
+        logger.error(f"Error serving document: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     print("🚀 Starting Shape Factory Backend...")
     print("📡 MCP System: Integrated")
@@ -6329,9 +9101,8 @@ if __name__ == '__main__':
     print("=" * 50)
     
     # Run migrations to fix known issues
-    # print("🔧 Running database migrations...")
-    # run_migrations()
-    # print("=" * 50)
+    print("🔧 Running database migrations...")
+    run_migrations()
+    print("=" * 50)
     
     socketio.run(app, host='0.0.0.0', port=5002, debug=True, allow_unsafe_werkzeug=True)
-    

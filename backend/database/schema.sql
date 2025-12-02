@@ -2,8 +2,10 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 15.13 (Homebrew)
--- Dumped by pg_dump version 15.13 (Homebrew)
+\restrict FbfWS1zFxrQIIPXIuD5aa2luRUo9S0K2ifpzhLL4JugQ54rmHmU8ERrvnGXMfd8
+
+-- Dumped from database version 16.11
+-- Dumped by pg_dump version 16.11
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -24,14 +26,14 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
 
 
 --
--- Name: EXTENSION "uuid-ossp"; Type: COMMENT; Schema: -; Owner: -
+-- Name: EXTENSION "uuid-ossp"; Type: COMMENT; Schema: -; Owner: 
 --
 
 COMMENT ON EXTENSION "uuid-ossp" IS 'generate universally unique identifiers (UUIDs)';
 
 
 --
--- Name: cleanup_old_notifications(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: cleanup_old_notifications(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.cleanup_old_notifications() RETURNS void
@@ -48,8 +50,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.cleanup_old_notifications() OWNER TO postgres;
+
 --
--- Name: complete_production_items(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: complete_production_items(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.complete_production_items() RETURNS void
@@ -83,8 +87,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.complete_production_items() OWNER TO postgres;
+
 --
--- Name: complete_transaction(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: complete_transaction(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.complete_transaction() RETURNS trigger
@@ -115,15 +121,17 @@ END;
 $$;
 
 
+ALTER FUNCTION public.complete_transaction() OWNER TO postgres;
+
 --
--- Name: FUNCTION complete_transaction(); Type: COMMENT; Schema: public; Owner: -
+-- Name: FUNCTION complete_transaction(); Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON FUNCTION public.complete_transaction() IS 'DISABLED: This function was causing duplicate inventory updates. Inventory updates are now handled directly in game_engine.py';
 
 
 --
--- Name: create_dashboard_notification(uuid, character varying, jsonb); Type: FUNCTION; Schema: public; Owner: -
+-- Name: create_dashboard_notification(uuid, character varying, jsonb); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.create_dashboard_notification(session_uuid uuid, notif_type character varying, notif_data jsonb) RETURNS void
@@ -136,8 +144,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.create_dashboard_notification(session_uuid uuid, notif_type character varying, notif_data jsonb) OWNER TO postgres;
+
 --
--- Name: generate_short_session_id(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: generate_short_session_id(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.generate_short_session_id() RETURNS character varying
@@ -157,8 +167,10 @@ END;
 $_$;
 
 
+ALTER FUNCTION public.generate_short_session_id() OWNER TO postgres;
+
 --
--- Name: generate_short_transaction_id(character varying); Type: FUNCTION; Schema: public; Owner: -
+-- Name: generate_short_transaction_id(character varying); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.generate_short_transaction_id(session_short_id character varying) RETURNS character varying
@@ -180,8 +192,10 @@ END;
 $_$;
 
 
+ALTER FUNCTION public.generate_short_transaction_id(session_short_id character varying) OWNER TO postgres;
+
 --
--- Name: get_most_active_participant(character varying); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_most_active_participant(character varying); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.get_most_active_participant(p_code character varying) RETURNS TABLE(participant_id uuid, session_id uuid, session_code character varying, participant_code character varying, last_activity_timestamp timestamp with time zone)
@@ -203,15 +217,17 @@ END;
 $$;
 
 
+ALTER FUNCTION public.get_most_active_participant(p_code character varying) OWNER TO postgres;
+
 --
--- Name: FUNCTION get_most_active_participant(p_code character varying); Type: COMMENT; Schema: public; Owner: -
+-- Name: FUNCTION get_most_active_participant(p_code character varying); Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON FUNCTION public.get_most_active_participant(p_code character varying) IS 'Get the most active participant for a given participant_code across all sessions';
 
 
 --
--- Name: get_session_agents(character varying); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_session_agents(character varying); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.get_session_agents(session_code_param character varying) RETURNS TABLE(participant_code character varying, agent_type character varying, specialty_shape character varying, agent_status character varying, money integer)
@@ -232,8 +248,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.get_session_agents(session_code_param character varying) OWNER TO postgres;
+
 --
--- Name: get_session_participant(character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+-- Name: get_session_participant(character varying, character varying); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.get_session_participant(p_code character varying, s_code character varying) RETURNS TABLE(participant_id uuid, session_id uuid, session_code character varying, participant_code character varying, last_activity_timestamp timestamp with time zone)
@@ -254,15 +272,17 @@ END;
 $$;
 
 
+ALTER FUNCTION public.get_session_participant(p_code character varying, s_code character varying) OWNER TO postgres;
+
 --
--- Name: FUNCTION get_session_participant(p_code character varying, s_code character varying); Type: COMMENT; Schema: public; Owner: -
+-- Name: FUNCTION get_session_participant(p_code character varying, s_code character varying); Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON FUNCTION public.get_session_participant(p_code character varying, s_code character varying) IS 'Get a specific participant by participant_code and session_code';
 
 
 --
--- Name: notify_new_message(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: notify_new_message(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.notify_new_message() RETURNS trigger
@@ -291,8 +311,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.notify_new_message() OWNER TO postgres;
+
 --
--- Name: notify_new_transaction(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: notify_new_transaction(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.notify_new_transaction() RETURNS trigger
@@ -328,8 +350,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.notify_new_transaction() OWNER TO postgres;
+
 --
--- Name: notify_participant_status_change(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: notify_participant_status_change(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.notify_participant_status_change() RETURNS trigger
@@ -362,8 +386,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.notify_participant_status_change() OWNER TO postgres;
+
 --
--- Name: set_session_short_id(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: set_session_short_id(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.set_session_short_id() RETURNS trigger
@@ -378,8 +404,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.set_session_short_id() OWNER TO postgres;
+
 --
--- Name: set_transaction_short_id(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: set_transaction_short_id(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.set_transaction_short_id() RETURNS trigger
@@ -396,8 +424,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.set_transaction_short_id() OWNER TO postgres;
+
 --
--- Name: update_agent_status(character varying, character varying); Type: FUNCTION; Schema: public; Owner: -
+-- Name: update_agent_status(character varying, character varying); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.update_agent_status(participant_code_param character varying, new_status character varying) RETURNS boolean
@@ -415,8 +445,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.update_agent_status(participant_code_param character varying, new_status character varying) OWNER TO postgres;
+
 --
--- Name: update_participant_activity(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: update_participant_activity(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.update_participant_activity() RETURNS trigger
@@ -431,8 +463,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.update_participant_activity() OWNER TO postgres;
+
 --
--- Name: update_production_queue_timestamp(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: update_production_queue_timestamp(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.update_production_queue_timestamp() RETURNS trigger
@@ -445,8 +479,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.update_production_queue_timestamp() OWNER TO postgres;
+
 --
--- Name: update_session_metrics(uuid); Type: FUNCTION; Schema: public; Owner: -
+-- Name: update_session_metrics(uuid); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.update_session_metrics(session_uuid uuid) RETURNS void
@@ -496,8 +532,10 @@ END;
 $$;
 
 
+ALTER FUNCTION public.update_session_metrics(session_uuid uuid) OWNER TO postgres;
+
 --
--- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
+-- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
@@ -510,12 +548,14 @@ END;
 $$;
 
 
+ALTER FUNCTION public.update_updated_at_column() OWNER TO postgres;
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
 --
--- Name: ai_agent_logs; Type: TABLE; Schema: public; Owner: -
+-- Name: ai_agent_logs; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.ai_agent_logs (
@@ -527,12 +567,14 @@ CREATE TABLE public.ai_agent_logs (
     reasoning_data jsonb NOT NULL,
     game_state_snapshot jsonb,
     triggered_by_event character varying(100),
-    CONSTRAINT ai_agent_logs_log_type_check CHECK (((log_type)::text = ANY ((ARRAY['decision_making'::character varying, 'strategy_update'::character varying, 'perception'::character varying, 'memory_update'::character varying, 'action_execution'::character varying])::text[])))
+    CONSTRAINT ai_agent_logs_log_type_check CHECK (((log_type)::text = ANY (ARRAY[('decision_making'::character varying)::text, ('strategy_update'::character varying)::text, ('perception'::character varying)::text, ('memory_update'::character varying)::text, ('action_execution'::character varying)::text])))
 );
 
 
+ALTER TABLE public.ai_agent_logs OWNER TO postgres;
+
 --
--- Name: dashboard_notifications; Type: TABLE; Schema: public; Owner: -
+-- Name: dashboard_notifications; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.dashboard_notifications (
@@ -543,12 +585,14 @@ CREATE TABLE public.dashboard_notifications (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     delivered_to_dashboard boolean DEFAULT false,
     delivered_at timestamp with time zone,
-    CONSTRAINT dashboard_notifications_notification_type_check CHECK (((notification_type)::text = ANY ((ARRAY['participant_status_change'::character varying, 'new_transaction'::character varying, 'new_message'::character varying, 'round_status_change'::character varying, 'system_alert'::character varying])::text[])))
+    CONSTRAINT dashboard_notifications_notification_type_check CHECK (((notification_type)::text = ANY (ARRAY[('participant_status_change'::character varying)::text, ('new_transaction'::character varying)::text, ('new_message'::character varying)::text, ('round_status_change'::character varying)::text, ('system_alert'::character varying)::text])))
 );
 
 
+ALTER TABLE public.dashboard_notifications OWNER TO postgres;
+
 --
--- Name: essay_assignments; Type: TABLE; Schema: public; Owner: -
+-- Name: essay_assignments; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.essay_assignments (
@@ -563,36 +607,38 @@ CREATE TABLE public.essay_assignments (
 );
 
 
+ALTER TABLE public.essay_assignments OWNER TO postgres;
+
 --
--- Name: TABLE essay_assignments; Type: COMMENT; Schema: public; Owner: -
+-- Name: TABLE essay_assignments; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON TABLE public.essay_assignments IS 'Simplified essay assignments for essayranking experiments - only essay_id and title needed';
 
 
 --
--- Name: COLUMN essay_assignments.essay_content; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN essay_assignments.essay_content; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.essay_assignments.essay_content IS 'Extracted text content from PDF essays';
 
 
 --
--- Name: COLUMN essay_assignments.essay_filename; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN essay_assignments.essay_filename; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.essay_assignments.essay_filename IS 'Original filename of the uploaded PDF';
 
 
 --
--- Name: COLUMN essay_assignments.essay_metadata; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN essay_assignments.essay_metadata; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.essay_assignments.essay_metadata IS 'Additional metadata about the essay (word count, reading time, etc.)';
 
 
 --
--- Name: investments; Type: TABLE; Schema: public; Owner: -
+-- Name: investments; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.investments (
@@ -605,40 +651,42 @@ CREATE TABLE public.investments (
     invest_data jsonb,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT investments_invest_decision_type_check CHECK (((invest_decision_type)::text = ANY ((ARRAY['individual'::character varying, 'group'::character varying])::text[])))
+    CONSTRAINT investments_invest_decision_type_check CHECK (((invest_decision_type)::text = ANY (ARRAY[('individual'::character varying)::text, ('group'::character varying)::text])))
 );
 
 
+ALTER TABLE public.investments OWNER TO postgres;
+
 --
--- Name: TABLE investments; Type: COMMENT; Schema: public; Owner: -
+-- Name: TABLE investments; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON TABLE public.investments IS 'Investment records for DayTrader experiments';
 
 
 --
--- Name: COLUMN investments.invest_price; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN investments.invest_price; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.investments.invest_price IS 'Price at which the investment was made';
 
 
 --
--- Name: COLUMN investments.invest_decision_type; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN investments.invest_decision_type; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.investments.invest_decision_type IS 'Whether decision was made individually or as part of a group';
 
 
 --
--- Name: COLUMN investments.invest_data; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN investments.invest_data; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.investments.invest_data IS 'Additional investment metadata in JSON format';
 
 
 --
--- Name: participants; Type: TABLE; Schema: public; Owner: -
+-- Name: participants; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.participants (
@@ -666,6 +714,13 @@ CREATE TABLE public.participants (
     specialty_production_used integer DEFAULT 0,
     mbti_type character varying(4),
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    mturk_worker_id character varying(255),
+    mturk_assignment_id character varying(255),
+    mturk_hit_id character varying(255),
+    prolific_pid character varying(255),
+    prolific_study_id character varying(255),
+    prolific_session_id character varying(255),
+    is_preview boolean DEFAULT false,
     current_rankings jsonb DEFAULT '[]'::jsonb,
     submitted_rankings_count integer DEFAULT 0,
     role character varying(20) DEFAULT NULL::character varying,
@@ -673,141 +728,145 @@ CREATE TABLE public.participants (
     score integer DEFAULT 0,
     assigned_words jsonb DEFAULT '[]'::jsonb,
     CONSTRAINT check_agent_fields CHECK (((is_agent = false) OR ((is_agent = true) AND (agent_type IS NOT NULL)))),
-    CONSTRAINT participants_login_status_check CHECK (((login_status)::text = ANY ((ARRAY['not_logged_in'::character varying, 'logged_in'::character varying, 'active'::character varying, 'disconnected'::character varying])::text[]))),
-    CONSTRAINT participants_participant_type_check CHECK (((participant_type)::text = ANY ((ARRAY['human'::character varying, 'ai_agent'::character varying])::text[]))),
-    CONSTRAINT participants_role_check CHECK (((role IS NULL) OR ((role)::text = ANY ((ARRAY['guesser'::character varying, 'hinter'::character varying])::text[]))))
+    CONSTRAINT participants_login_status_check CHECK (((login_status)::text = ANY (ARRAY[('not_logged_in'::character varying)::text, ('logged_in'::character varying)::text, ('active'::character varying)::text, ('disconnected'::character varying)::text]))),
+    CONSTRAINT participants_participant_type_check CHECK (((participant_type)::text = ANY (ARRAY[('human'::character varying)::text, ('ai_agent'::character varying)::text]))),
+    CONSTRAINT participants_role_check CHECK (((role IS NULL) OR ((role)::text = ANY (ARRAY[('guesser'::character varying)::text, ('hinter'::character varying)::text]))))
 );
 
 
+ALTER TABLE public.participants OWNER TO postgres;
+
 --
--- Name: COLUMN participants.last_activity_timestamp; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.last_activity_timestamp; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.last_activity_timestamp IS 'Timestamp of last activity for ordering in session-aware queries';
 
 
 --
--- Name: COLUMN participants.session_code; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.session_code; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.session_code IS 'Human-readable session identifier for easier querying and session separation';
 
 
 --
--- Name: COLUMN participants.is_agent; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.is_agent; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.is_agent IS 'Whether this participant is an AI agent';
 
 
 --
--- Name: COLUMN participants.agent_type; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.agent_type; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.agent_type IS 'Type of AI agent (now always basic_agent)';
 
 
 --
--- Name: COLUMN participants.agent_status; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.agent_status; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.agent_status IS 'Current status of AI agent (inactive, active, created)';
 
 
 --
--- Name: COLUMN participants.money; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.money; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.money IS 'Current money balance for the participant';
 
 
 --
--- Name: COLUMN participants.last_activity; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.last_activity; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.last_activity IS 'Timestamp of last activity';
 
 
 --
--- Name: COLUMN participants.tag; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.tag; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.tag IS 'Optional tag for grouping participants (e.g., "Group A", "Test Agents")';
 
 
 --
--- Name: COLUMN participants.orders; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.orders; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.orders IS 'Static orders assigned to participant during registration (JSON array of shape names)';
 
 
 --
--- Name: COLUMN participants.current_rankings; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.current_rankings; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.current_rankings IS 'Current essay rankings for essayranking experiment (JSON array)';
 
 
 --
--- Name: COLUMN participants.submitted_rankings_count; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.submitted_rankings_count; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.submitted_rankings_count IS 'Number of ranking submissions completed';
 
 
 --
--- Name: COLUMN participants.role; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.role; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.role IS 'Role in wordguessing experiment: guesser or hinter';
 
 
 --
--- Name: COLUMN participants.current_round; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.current_round; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.current_round IS 'Current round number in wordguessing experiment';
 
 
 --
--- Name: COLUMN participants.score; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.score; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.score IS 'Current score in wordguessing experiment';
 
 
 --
--- Name: COLUMN participants.assigned_words; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN participants.assigned_words; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON COLUMN public.participants.assigned_words IS 'Words assigned to hinter participant (JSON array)';
 
 
 --
--- Name: mcp_agents; Type: VIEW; Schema: public; Owner: -
+-- Name: mcp_agents; Type: VIEW; Schema: public; Owner: postgres
 --
 
 CREATE VIEW public.mcp_agents AS
- SELECT participants.participant_id,
-    participants.participant_code,
-    participants.session_code,
-    participants.specialty_shape,
-    participants.money,
-    participants.agent_type,
-    participants.agent_status,
-    participants.last_activity,
-    participants.login_status,
-    participants.total_score,
-    participants.shapes_bought,
-    participants.shapes_sold,
-    participants.orders_completed
+ SELECT participant_id,
+    participant_code,
+    session_code,
+    specialty_shape,
+    money,
+    agent_type,
+    agent_status,
+    last_activity,
+    login_status,
+    total_score,
+    shapes_bought,
+    shapes_sold,
+    orders_completed
    FROM public.participants
-  WHERE (participants.is_agent = true);
+  WHERE (is_agent = true);
 
+
+ALTER VIEW public.mcp_agents OWNER TO postgres;
 
 --
--- Name: messages; Type: TABLE; Schema: public; Owner: -
+-- Name: messages; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.messages (
@@ -820,13 +879,53 @@ CREATE TABLE public.messages (
     message_timestamp timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     message_data jsonb,
     delivered_status character varying(20) DEFAULT 'sent'::character varying NOT NULL,
-    CONSTRAINT messages_delivered_status_check CHECK (((delivered_status)::text = ANY ((ARRAY['sent'::character varying, 'delivered'::character varying, 'read'::character varying, 'failed'::character varying])::text[]))),
-    CONSTRAINT messages_message_type_check CHECK (((message_type)::text = ANY ((ARRAY['chat'::character varying, 'transaction_request'::character varying, 'transaction_response'::character varying, 'system_notification'::character varying])::text[])))
+    CONSTRAINT messages_delivered_status_check CHECK (((delivered_status)::text = ANY (ARRAY[('sent'::character varying)::text, ('delivered'::character varying)::text, ('read'::character varying)::text, ('failed'::character varying)::text]))),
+    CONSTRAINT messages_message_type_check CHECK (((message_type)::text = ANY (ARRAY[('chat'::character varying)::text, ('transaction_request'::character varying)::text, ('transaction_response'::character varying)::text, ('system_notification'::character varying)::text])))
 );
 
 
+ALTER TABLE public.messages OWNER TO postgres;
+
 --
--- Name: participant_orders; Type: TABLE; Schema: public; Owner: -
+-- Name: mturk_tasks; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.mturk_tasks (
+    id integer NOT NULL,
+    hit_id character varying(255) NOT NULL,
+    session_id uuid,
+    environment character varying(20) NOT NULL,
+    status character varying(50) DEFAULT 'ASSOCIATED'::character varying NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE public.mturk_tasks OWNER TO postgres;
+
+--
+-- Name: mturk_tasks_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.mturk_tasks_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.mturk_tasks_id_seq OWNER TO postgres;
+
+--
+-- Name: mturk_tasks_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.mturk_tasks_id_seq OWNED BY public.mturk_tasks.id;
+
+
+--
+-- Name: participant_orders; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.participant_orders (
@@ -838,12 +937,14 @@ CREATE TABLE public.participant_orders (
     completion_timestamp timestamp with time zone,
     order_score integer DEFAULT 0,
     session_id uuid NOT NULL,
-    CONSTRAINT participant_orders_order_completion_status_check CHECK (((order_completion_status)::text = ANY ((ARRAY['pending'::character varying, 'in_progress'::character varying, 'completed'::character varying, 'failed'::character varying])::text[])))
+    CONSTRAINT participant_orders_order_completion_status_check CHECK (((order_completion_status)::text = ANY (ARRAY[('pending'::character varying)::text, ('in_progress'::character varying)::text, ('completed'::character varying)::text, ('failed'::character varying)::text])))
 );
 
 
+ALTER TABLE public.participant_orders OWNER TO postgres;
+
 --
--- Name: participant_status_log; Type: TABLE; Schema: public; Owner: -
+-- Name: participant_status_log; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.participant_status_log (
@@ -859,8 +960,10 @@ CREATE TABLE public.participant_status_log (
 );
 
 
+ALTER TABLE public.participant_status_log OWNER TO postgres;
+
 --
--- Name: production_queue; Type: TABLE; Schema: public; Owner: -
+-- Name: production_queue; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.production_queue (
@@ -875,8 +978,10 @@ CREATE TABLE public.production_queue (
 );
 
 
+ALTER TABLE public.production_queue OWNER TO postgres;
+
 --
--- Name: ranking_submissions; Type: TABLE; Schema: public; Owner: -
+-- Name: ranking_submissions; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.ranking_submissions (
@@ -889,15 +994,17 @@ CREATE TABLE public.ranking_submissions (
 );
 
 
+ALTER TABLE public.ranking_submissions OWNER TO postgres;
+
 --
--- Name: TABLE ranking_submissions; Type: COMMENT; Schema: public; Owner: -
+-- Name: TABLE ranking_submissions; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON TABLE public.ranking_submissions IS 'Participant ranking submissions - allows multiple submissions and adjustments';
 
 
 --
--- Name: research_observations; Type: TABLE; Schema: public; Owner: -
+-- Name: research_observations; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.research_observations (
@@ -909,12 +1016,14 @@ CREATE TABLE public.research_observations (
     observation_content text NOT NULL,
     related_participant_id uuid,
     observation_data jsonb,
-    CONSTRAINT research_observations_observation_type_check CHECK (((observation_type)::text = ANY ((ARRAY['behavioral_note'::character varying, 'technical_issue'::character varying, 'protocol_deviation'::character varying, 'interesting_pattern'::character varying])::text[])))
+    CONSTRAINT research_observations_observation_type_check CHECK (((observation_type)::text = ANY (ARRAY[('behavioral_note'::character varying)::text, ('technical_issue'::character varying)::text, ('protocol_deviation'::character varying)::text, ('interesting_pattern'::character varying)::text])))
 );
 
 
+ALTER TABLE public.research_observations OWNER TO postgres;
+
 --
--- Name: schema_version; Type: TABLE; Schema: public; Owner: -
+-- Name: schema_version; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.schema_version (
@@ -924,8 +1033,10 @@ CREATE TABLE public.schema_version (
 );
 
 
+ALTER TABLE public.schema_version OWNER TO postgres;
+
 --
--- Name: session_analytics; Type: TABLE; Schema: public; Owner: -
+-- Name: session_analytics; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.session_analytics (
@@ -945,8 +1056,10 @@ CREATE TABLE public.session_analytics (
 );
 
 
+ALTER TABLE public.session_analytics OWNER TO postgres;
+
 --
--- Name: session_metrics_realtime; Type: TABLE; Schema: public; Owner: -
+-- Name: session_metrics_realtime; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.session_metrics_realtime (
@@ -965,8 +1078,10 @@ CREATE TABLE public.session_metrics_realtime (
 );
 
 
+ALTER TABLE public.session_metrics_realtime OWNER TO postgres;
+
 --
--- Name: session_templates; Type: TABLE; Schema: public; Owner: -
+-- Name: session_templates; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.session_templates (
@@ -980,8 +1095,10 @@ CREATE TABLE public.session_templates (
 );
 
 
+ALTER TABLE public.session_templates OWNER TO postgres;
+
 --
--- Name: sessions; Type: TABLE; Schema: public; Owner: -
+-- Name: sessions; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.sessions (
@@ -1000,28 +1117,30 @@ CREATE TABLE public.sessions (
     session_completed_at timestamp with time zone,
     experiment_config jsonb,
     short_id character varying(20),
-    CONSTRAINT sessions_experiment_type_check CHECK ((((experiment_type)::text = ANY ((ARRAY['shapefactory'::character varying, 'daytrader'::character varying, 'essayranking'::character varying, 'wordguessing'::character varying, 'ecl_custom'::character varying])::text[])) OR ((experiment_type)::text ~~ 'custom_%'::text) OR (experiment_type IS NULL))),
-    CONSTRAINT sessions_session_status_check CHECK (((session_status)::text = ANY ((ARRAY['idle'::character varying, 'setup_complete'::character varying, 'session_active'::character varying, 'session_paused'::character varying, 'session_completed'::character varying])::text[]))),
+    CONSTRAINT sessions_experiment_type_check CHECK ((((experiment_type)::text = ANY (ARRAY[('shapefactory'::character varying)::text, ('daytrader'::character varying)::text, ('essayranking'::character varying)::text, ('wordguessing'::character varying)::text, ('ecl_custom'::character varying)::text, ('hiddenprofiles'::character varying)::text])) OR ((experiment_type)::text ~~ 'custom_%'::text) OR (experiment_type IS NULL))),
+    CONSTRAINT sessions_session_status_check CHECK (((session_status)::text = ANY (ARRAY[('idle'::character varying)::text, ('setup_complete'::character varying)::text, ('session_active'::character varying)::text, ('session_paused'::character varying)::text, ('session_completed'::character varying)::text]))),
     CONSTRAINT valid_session_timing CHECK ((((setup_started_at IS NULL) OR (setup_started_at >= created_at)) AND ((session_started_at IS NULL) OR (session_started_at >= setup_started_at)) AND ((session_completed_at IS NULL) OR (session_completed_at >= session_started_at))))
 );
 
 
---
--- Name: COLUMN sessions.experiment_type; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.sessions.experiment_type IS 'Experiment type (shapefactory, daytrader, essayranking, wordguessing, or custom_*). Can be NULL initially and set later when researcher selects experiment.';
-
+ALTER TABLE public.sessions OWNER TO postgres;
 
 --
--- Name: CONSTRAINT sessions_experiment_type_check ON sessions; Type: COMMENT; Schema: public; Owner: -
+-- Name: COLUMN sessions.experiment_type; Type: COMMENT; Schema: public; Owner: postgres
 --
 
-COMMENT ON CONSTRAINT sessions_experiment_type_check ON public.sessions IS 'Allows valid experiment types: shapefactory, daytrader, essayranking, wordguessing, ecl_custom, or custom_* (can also be NULL)';
+COMMENT ON COLUMN public.sessions.experiment_type IS 'Experiment type (shapefactory, daytrader, essayranking, wordguessing, hiddenprofiles, or custom_*). Can be NULL initially and set later when researcher selects experiment.';
 
 
 --
--- Name: shape_inventory; Type: TABLE; Schema: public; Owner: -
+-- Name: CONSTRAINT sessions_experiment_type_check ON sessions; Type: COMMENT; Schema: public; Owner: postgres
+--
+
+COMMENT ON CONSTRAINT sessions_experiment_type_check ON public.sessions IS 'Allows valid experiment types: shapefactory, daytrader, essayranking, wordguessing, ecl_custom, hiddenprofiles, or custom_* (can also be NULL)';
+
+
+--
+-- Name: shape_inventory; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.shape_inventory (
@@ -1035,8 +1154,10 @@ CREATE TABLE public.shape_inventory (
 );
 
 
+ALTER TABLE public.shape_inventory OWNER TO postgres;
+
 --
--- Name: transactions; Type: TABLE; Schema: public; Owner: -
+-- Name: transactions; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.transactions (
@@ -1058,14 +1179,16 @@ CREATE TABLE public.transactions (
     offer_type character varying(10),
     short_id character varying(20),
     CONSTRAINT no_self_trading CHECK ((seller_id <> buyer_id)),
-    CONSTRAINT transactions_offer_type_check CHECK (((offer_type)::text = ANY ((ARRAY['buy'::character varying, 'sell'::character varying])::text[]))),
-    CONSTRAINT transactions_transaction_status_check CHECK (((transaction_status)::text = ANY ((ARRAY['proposed'::character varying, 'negotiating'::character varying, 'agreed'::character varying, 'completed'::character varying, 'cancelled'::character varying])::text[]))),
+    CONSTRAINT transactions_offer_type_check CHECK (((offer_type)::text = ANY (ARRAY[('buy'::character varying)::text, ('sell'::character varying)::text]))),
+    CONSTRAINT transactions_transaction_status_check CHECK (((transaction_status)::text = ANY (ARRAY[('proposed'::character varying)::text, ('negotiating'::character varying)::text, ('agreed'::character varying)::text, ('completed'::character varying)::text, ('cancelled'::character varying)::text]))),
     CONSTRAINT valid_transaction_timing CHECK ((((agreed_timestamp IS NULL) OR (agreed_timestamp >= proposed_timestamp)) AND ((completed_timestamp IS NULL) OR (completed_timestamp >= agreed_timestamp))))
 );
 
 
+ALTER TABLE public.transactions OWNER TO postgres;
+
 --
--- Name: wordguessing_chat_history; Type: TABLE; Schema: public; Owner: -
+-- Name: wordguessing_chat_history; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.wordguessing_chat_history (
@@ -1079,15 +1202,24 @@ CREATE TABLE public.wordguessing_chat_history (
 );
 
 
+ALTER TABLE public.wordguessing_chat_history OWNER TO postgres;
+
 --
--- Name: TABLE wordguessing_chat_history; Type: COMMENT; Schema: public; Owner: -
+-- Name: TABLE wordguessing_chat_history; Type: COMMENT; Schema: public; Owner: postgres
 --
 
 COMMENT ON TABLE public.wordguessing_chat_history IS 'Stores chat history for wordguessing experiment with guesses and correctness';
 
 
 --
--- Name: ai_agent_logs ai_agent_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: mturk_tasks id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.mturk_tasks ALTER COLUMN id SET DEFAULT nextval('public.mturk_tasks_id_seq'::regclass);
+
+
+--
+-- Name: ai_agent_logs ai_agent_logs_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.ai_agent_logs
@@ -1095,7 +1227,7 @@ ALTER TABLE ONLY public.ai_agent_logs
 
 
 --
--- Name: dashboard_notifications dashboard_notifications_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: dashboard_notifications dashboard_notifications_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.dashboard_notifications
@@ -1103,7 +1235,7 @@ ALTER TABLE ONLY public.dashboard_notifications
 
 
 --
--- Name: essay_assignments essay_assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: essay_assignments essay_assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.essay_assignments
@@ -1111,7 +1243,7 @@ ALTER TABLE ONLY public.essay_assignments
 
 
 --
--- Name: essay_assignments essay_assignments_session_id_essay_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: essay_assignments essay_assignments_session_id_essay_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.essay_assignments
@@ -1119,7 +1251,7 @@ ALTER TABLE ONLY public.essay_assignments
 
 
 --
--- Name: investments investments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: investments investments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.investments
@@ -1127,7 +1259,7 @@ ALTER TABLE ONLY public.investments
 
 
 --
--- Name: messages messages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: messages messages_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.messages
@@ -1135,7 +1267,23 @@ ALTER TABLE ONLY public.messages
 
 
 --
--- Name: participant_orders participant_orders_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: mturk_tasks mturk_tasks_hit_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.mturk_tasks
+    ADD CONSTRAINT mturk_tasks_hit_id_key UNIQUE (hit_id);
+
+
+--
+-- Name: mturk_tasks mturk_tasks_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.mturk_tasks
+    ADD CONSTRAINT mturk_tasks_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: participant_orders participant_orders_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_orders
@@ -1143,7 +1291,7 @@ ALTER TABLE ONLY public.participant_orders
 
 
 --
--- Name: participant_orders participant_orders_session_id_participant_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: participant_orders participant_orders_session_id_participant_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_orders
@@ -1151,7 +1299,7 @@ ALTER TABLE ONLY public.participant_orders
 
 
 --
--- Name: participant_status_log participant_status_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: participant_status_log participant_status_log_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_status_log
@@ -1159,7 +1307,23 @@ ALTER TABLE ONLY public.participant_status_log
 
 
 --
--- Name: participants participants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: participants participants_mturk_assignment_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.participants
+    ADD CONSTRAINT participants_mturk_assignment_id_key UNIQUE (mturk_assignment_id);
+
+
+--
+-- Name: participants participants_mturk_worker_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.participants
+    ADD CONSTRAINT participants_mturk_worker_id_key UNIQUE (mturk_worker_id);
+
+
+--
+-- Name: participants participants_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participants
@@ -1167,7 +1331,7 @@ ALTER TABLE ONLY public.participants
 
 
 --
--- Name: participants participants_session_code_participant_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: participants participants_session_code_participant_code_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participants
@@ -1175,7 +1339,7 @@ ALTER TABLE ONLY public.participants
 
 
 --
--- Name: participants participants_session_id_color_shape_combination_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: participants participants_session_id_color_shape_combination_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participants
@@ -1183,7 +1347,7 @@ ALTER TABLE ONLY public.participants
 
 
 --
--- Name: participants participants_session_id_participant_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: participants participants_session_id_participant_code_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participants
@@ -1191,7 +1355,7 @@ ALTER TABLE ONLY public.participants
 
 
 --
--- Name: production_queue production_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: production_queue production_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.production_queue
@@ -1199,7 +1363,7 @@ ALTER TABLE ONLY public.production_queue
 
 
 --
--- Name: ranking_submissions ranking_submissions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: ranking_submissions ranking_submissions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.ranking_submissions
@@ -1207,7 +1371,7 @@ ALTER TABLE ONLY public.ranking_submissions
 
 
 --
--- Name: research_observations research_observations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: research_observations research_observations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.research_observations
@@ -1215,7 +1379,7 @@ ALTER TABLE ONLY public.research_observations
 
 
 --
--- Name: schema_version schema_version_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: schema_version schema_version_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.schema_version
@@ -1223,7 +1387,7 @@ ALTER TABLE ONLY public.schema_version
 
 
 --
--- Name: session_analytics session_analytics_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_analytics session_analytics_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_analytics
@@ -1231,7 +1395,7 @@ ALTER TABLE ONLY public.session_analytics
 
 
 --
--- Name: session_analytics session_analytics_session_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_analytics session_analytics_session_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_analytics
@@ -1239,7 +1403,7 @@ ALTER TABLE ONLY public.session_analytics
 
 
 --
--- Name: session_metrics_realtime session_metrics_realtime_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_metrics_realtime session_metrics_realtime_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_metrics_realtime
@@ -1247,7 +1411,7 @@ ALTER TABLE ONLY public.session_metrics_realtime
 
 
 --
--- Name: session_templates session_templates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_templates session_templates_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_templates
@@ -1255,7 +1419,7 @@ ALTER TABLE ONLY public.session_templates
 
 
 --
--- Name: session_templates session_templates_session_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: session_templates session_templates_session_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_templates
@@ -1263,7 +1427,7 @@ ALTER TABLE ONLY public.session_templates
 
 
 --
--- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.sessions
@@ -1271,7 +1435,7 @@ ALTER TABLE ONLY public.sessions
 
 
 --
--- Name: sessions sessions_session_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sessions sessions_session_code_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.sessions
@@ -1279,7 +1443,7 @@ ALTER TABLE ONLY public.sessions
 
 
 --
--- Name: sessions sessions_short_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: sessions sessions_short_id_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.sessions
@@ -1287,7 +1451,7 @@ ALTER TABLE ONLY public.sessions
 
 
 --
--- Name: shape_inventory shape_inventory_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shape_inventory shape_inventory_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.shape_inventory
@@ -1295,7 +1459,7 @@ ALTER TABLE ONLY public.shape_inventory
 
 
 --
--- Name: shape_inventory shape_inventory_session_id_participant_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: shape_inventory shape_inventory_session_id_participant_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.shape_inventory
@@ -1303,7 +1467,7 @@ ALTER TABLE ONLY public.shape_inventory
 
 
 --
--- Name: transactions transactions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: transactions transactions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.transactions
@@ -1311,7 +1475,7 @@ ALTER TABLE ONLY public.transactions
 
 
 --
--- Name: transactions transactions_short_id_unique; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: transactions transactions_short_id_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.transactions
@@ -1319,7 +1483,7 @@ ALTER TABLE ONLY public.transactions
 
 
 --
--- Name: wordguessing_chat_history wordguessing_chat_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: wordguessing_chat_history wordguessing_chat_history_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.wordguessing_chat_history
@@ -1327,476 +1491,476 @@ ALTER TABLE ONLY public.wordguessing_chat_history
 
 
 --
--- Name: idx_ai_logs_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ai_logs_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ai_logs_participant ON public.ai_agent_logs USING btree (participant_id);
 
 
 --
--- Name: idx_ai_logs_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ai_logs_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ai_logs_session ON public.ai_agent_logs USING btree (session_id);
 
 
 --
--- Name: idx_ai_logs_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ai_logs_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ai_logs_timestamp ON public.ai_agent_logs USING btree (log_timestamp);
 
 
 --
--- Name: idx_essay_assignments_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_essay_assignments_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_essay_assignments_session ON public.essay_assignments USING btree (session_id);
 
 
 --
--- Name: idx_inventory_session_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_inventory_session_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_inventory_session_participant ON public.shape_inventory USING btree (session_id, participant_id);
 
 
 --
--- Name: idx_investments_decision_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_investments_decision_type; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_investments_decision_type ON public.investments USING btree (invest_decision_type);
 
 
 --
--- Name: idx_investments_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_investments_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_investments_participant ON public.investments USING btree (participant_id);
 
 
 --
--- Name: idx_investments_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_investments_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_investments_session ON public.investments USING btree (session_id);
 
 
 --
--- Name: idx_investments_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_investments_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_investments_timestamp ON public.investments USING btree (invest_timestamp);
 
 
 --
--- Name: idx_messages_recipient; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_messages_recipient; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_messages_recipient ON public.messages USING btree (recipient_id);
 
 
 --
--- Name: idx_messages_sender; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_messages_sender; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_messages_sender ON public.messages USING btree (sender_id);
 
 
 --
--- Name: idx_messages_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_messages_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_messages_session ON public.messages USING btree (session_id);
 
 
 --
--- Name: idx_messages_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_messages_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_messages_timestamp ON public.messages USING btree (message_timestamp);
 
 
 --
--- Name: idx_messages_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_messages_type; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_messages_type ON public.messages USING btree (message_type);
 
 
 --
--- Name: idx_notifications_created; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_notifications_created; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_notifications_created ON public.dashboard_notifications USING btree (created_at);
 
 
 --
--- Name: idx_notifications_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_notifications_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_notifications_session ON public.dashboard_notifications USING btree (session_id);
 
 
 --
--- Name: idx_notifications_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_notifications_type; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_notifications_type ON public.dashboard_notifications USING btree (notification_type);
 
 
 --
--- Name: idx_notifications_undelivered; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_notifications_undelivered; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_notifications_undelivered ON public.dashboard_notifications USING btree (delivered_to_dashboard) WHERE (delivered_to_dashboard = false);
 
 
 --
--- Name: idx_observations_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_observations_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_observations_session ON public.research_observations USING btree (session_id);
 
 
 --
--- Name: idx_observations_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_observations_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_observations_timestamp ON public.research_observations USING btree (observation_timestamp);
 
 
 --
--- Name: idx_orders_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_orders_participant ON public.participant_orders USING btree (participant_id);
 
 
 --
--- Name: idx_orders_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_orders_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_orders_session ON public.participant_orders USING btree (session_id);
 
 
 --
--- Name: idx_participants_agent_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_agent_type; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_agent_type ON public.participants USING btree (agent_type);
 
 
 --
--- Name: idx_participants_code_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_code_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_code_session ON public.participants USING btree (participant_code, session_code);
 
 
 --
--- Name: idx_participants_is_agent; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_is_agent; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_is_agent ON public.participants USING btree (is_agent);
 
 
 --
--- Name: idx_participants_mbti_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_mbti_type; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_mbti_type ON public.participants USING btree (mbti_type);
 
 
 --
--- Name: idx_participants_money; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_money; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_money ON public.participants USING btree (money);
 
 
 --
--- Name: idx_participants_orders; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_orders; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_orders ON public.participants USING gin (orders);
 
 
 --
--- Name: idx_participants_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_session ON public.participants USING btree (session_id);
 
 
 --
--- Name: idx_participants_session_activity; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_session_activity; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_session_activity ON public.participants USING btree (session_id, last_activity_timestamp DESC NULLS LAST);
 
 
 --
--- Name: idx_participants_session_code; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_session_code; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_session_code ON public.participants USING btree (session_code);
 
 
 --
--- Name: idx_participants_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_status; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_status ON public.participants USING btree (login_status);
 
 
 --
--- Name: idx_participants_tag; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_tag; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_tag ON public.participants USING btree (tag);
 
 
 --
--- Name: idx_participants_type; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_participants_type; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_participants_type ON public.participants USING btree (participant_type);
 
 
 --
--- Name: idx_production_queue_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_production_queue_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_production_queue_participant ON public.production_queue USING btree (participant_id);
 
 
 --
--- Name: idx_ranking_submissions_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ranking_submissions_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ranking_submissions_participant ON public.ranking_submissions USING btree (participant_id);
 
 
 --
--- Name: idx_ranking_submissions_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ranking_submissions_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ranking_submissions_session ON public.ranking_submissions USING btree (session_id);
 
 
 --
--- Name: idx_ranking_submissions_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_ranking_submissions_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ranking_submissions_timestamp ON public.ranking_submissions USING btree (submission_timestamp);
 
 
 --
--- Name: idx_session_templates_default; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_templates_default; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_session_templates_default ON public.session_templates USING btree (is_default) WHERE (is_default = true);
 
 
 --
--- Name: idx_session_templates_researcher; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_templates_researcher; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_session_templates_researcher ON public.session_templates USING btree (researcher_id);
 
 
 --
--- Name: idx_session_templates_session_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_session_templates_session_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_session_templates_session_id ON public.session_templates USING btree (session_id);
 
 
 --
--- Name: idx_sessions_researcher; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sessions_researcher; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sessions_researcher ON public.sessions USING btree (researcher_id);
 
 
 --
--- Name: idx_sessions_short_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sessions_short_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sessions_short_id ON public.sessions USING btree (short_id);
 
 
 --
--- Name: idx_sessions_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_sessions_status; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sessions_status ON public.sessions USING btree (session_status);
 
 
 --
--- Name: idx_status_log_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_status_log_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_status_log_participant ON public.participant_status_log USING btree (participant_id);
 
 
 --
--- Name: idx_status_log_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_status_log_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_status_log_session ON public.participant_status_log USING btree (session_id);
 
 
 --
--- Name: idx_status_log_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_status_log_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_status_log_timestamp ON public.participant_status_log USING btree (status_change_timestamp);
 
 
 --
--- Name: idx_transactions_buyer; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_buyer; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_buyer ON public.transactions USING btree (buyer_id);
 
 
 --
--- Name: idx_transactions_seller; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_seller; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_seller ON public.transactions USING btree (seller_id);
 
 
 --
--- Name: idx_transactions_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_session ON public.transactions USING btree (session_id);
 
 
 --
--- Name: idx_transactions_session_short_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_session_short_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_session_short_id ON public.transactions USING btree (session_id, short_id);
 
 
 --
--- Name: idx_transactions_session_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_session_status; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_session_status ON public.transactions USING btree (session_id, transaction_status);
 
 
 --
--- Name: idx_transactions_short_id; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_short_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_short_id ON public.transactions USING btree (short_id);
 
 
 --
--- Name: idx_transactions_status; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_status; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_status ON public.transactions USING btree (transaction_status);
 
 
 --
--- Name: idx_transactions_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_transactions_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_transactions_timestamp ON public.transactions USING btree (proposed_timestamp);
 
 
 --
--- Name: idx_wordguessing_chat_participant; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_wordguessing_chat_participant; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_wordguessing_chat_participant ON public.wordguessing_chat_history USING btree (participant_id);
 
 
 --
--- Name: idx_wordguessing_chat_round; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_wordguessing_chat_round; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_wordguessing_chat_round ON public.wordguessing_chat_history USING btree (round_number);
 
 
 --
--- Name: idx_wordguessing_chat_session; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_wordguessing_chat_session; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_wordguessing_chat_session ON public.wordguessing_chat_history USING btree (session_id);
 
 
 --
--- Name: idx_wordguessing_chat_timestamp; Type: INDEX; Schema: public; Owner: -
+-- Name: idx_wordguessing_chat_timestamp; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_wordguessing_chat_timestamp ON public.wordguessing_chat_history USING btree ("timestamp");
 
 
 --
--- Name: messages trigger_new_message; Type: TRIGGER; Schema: public; Owner: -
+-- Name: messages trigger_new_message; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_new_message AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION public.notify_new_message();
 
 
 --
--- Name: transactions trigger_new_transaction; Type: TRIGGER; Schema: public; Owner: -
+-- Name: transactions trigger_new_transaction; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_new_transaction AFTER INSERT ON public.transactions FOR EACH ROW EXECUTE FUNCTION public.notify_new_transaction();
 
 
 --
--- Name: participants trigger_participant_status_change; Type: TRIGGER; Schema: public; Owner: -
+-- Name: participants trigger_participant_status_change; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_participant_status_change AFTER UPDATE OF login_status ON public.participants FOR EACH ROW EXECUTE FUNCTION public.notify_participant_status_change();
 
 
 --
--- Name: sessions trigger_set_session_short_id; Type: TRIGGER; Schema: public; Owner: -
+-- Name: sessions trigger_set_session_short_id; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_set_session_short_id BEFORE INSERT ON public.sessions FOR EACH ROW EXECUTE FUNCTION public.set_session_short_id();
 
 
 --
--- Name: transactions trigger_set_transaction_short_id; Type: TRIGGER; Schema: public; Owner: -
+-- Name: transactions trigger_set_transaction_short_id; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_set_transaction_short_id BEFORE INSERT ON public.transactions FOR EACH ROW EXECUTE FUNCTION public.set_transaction_short_id();
 
 
 --
--- Name: messages trigger_update_activity; Type: TRIGGER; Schema: public; Owner: -
+-- Name: messages trigger_update_activity; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trigger_update_activity AFTER INSERT ON public.messages FOR EACH ROW EXECUTE FUNCTION public.update_participant_activity();
 
 
 --
--- Name: investments update_investments_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: investments update_investments_updated_at; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER update_investments_updated_at BEFORE UPDATE ON public.investments FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
--- Name: session_templates update_session_templates_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: session_templates update_session_templates_updated_at; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER update_session_templates_updated_at BEFORE UPDATE ON public.session_templates FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
--- Name: ai_agent_logs ai_agent_logs_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: ai_agent_logs ai_agent_logs_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.ai_agent_logs
@@ -1804,7 +1968,7 @@ ALTER TABLE ONLY public.ai_agent_logs
 
 
 --
--- Name: ai_agent_logs ai_agent_logs_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: ai_agent_logs ai_agent_logs_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.ai_agent_logs
@@ -1812,7 +1976,7 @@ ALTER TABLE ONLY public.ai_agent_logs
 
 
 --
--- Name: dashboard_notifications dashboard_notifications_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: dashboard_notifications dashboard_notifications_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.dashboard_notifications
@@ -1820,7 +1984,7 @@ ALTER TABLE ONLY public.dashboard_notifications
 
 
 --
--- Name: essay_assignments essay_assignments_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: essay_assignments essay_assignments_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.essay_assignments
@@ -1828,7 +1992,7 @@ ALTER TABLE ONLY public.essay_assignments
 
 
 --
--- Name: investments investments_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: investments investments_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.investments
@@ -1836,7 +2000,7 @@ ALTER TABLE ONLY public.investments
 
 
 --
--- Name: investments investments_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: investments investments_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.investments
@@ -1844,7 +2008,7 @@ ALTER TABLE ONLY public.investments
 
 
 --
--- Name: messages messages_recipient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: messages messages_recipient_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.messages
@@ -1852,7 +2016,7 @@ ALTER TABLE ONLY public.messages
 
 
 --
--- Name: messages messages_sender_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: messages messages_sender_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.messages
@@ -1860,7 +2024,7 @@ ALTER TABLE ONLY public.messages
 
 
 --
--- Name: messages messages_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: messages messages_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.messages
@@ -1868,7 +2032,15 @@ ALTER TABLE ONLY public.messages
 
 
 --
--- Name: participant_orders participant_orders_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: mturk_tasks mturk_tasks_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.mturk_tasks
+    ADD CONSTRAINT mturk_tasks_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(session_id) ON DELETE CASCADE;
+
+
+--
+-- Name: participant_orders participant_orders_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_orders
@@ -1876,7 +2048,7 @@ ALTER TABLE ONLY public.participant_orders
 
 
 --
--- Name: participant_orders participant_orders_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: participant_orders participant_orders_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_orders
@@ -1884,7 +2056,7 @@ ALTER TABLE ONLY public.participant_orders
 
 
 --
--- Name: participant_status_log participant_status_log_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: participant_status_log participant_status_log_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_status_log
@@ -1892,7 +2064,7 @@ ALTER TABLE ONLY public.participant_status_log
 
 
 --
--- Name: participant_status_log participant_status_log_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: participant_status_log participant_status_log_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participant_status_log
@@ -1900,7 +2072,7 @@ ALTER TABLE ONLY public.participant_status_log
 
 
 --
--- Name: participants participants_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: participants participants_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.participants
@@ -1908,7 +2080,7 @@ ALTER TABLE ONLY public.participants
 
 
 --
--- Name: production_queue production_queue_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: production_queue production_queue_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.production_queue
@@ -1916,7 +2088,7 @@ ALTER TABLE ONLY public.production_queue
 
 
 --
--- Name: ranking_submissions ranking_submissions_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: ranking_submissions ranking_submissions_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.ranking_submissions
@@ -1924,7 +2096,7 @@ ALTER TABLE ONLY public.ranking_submissions
 
 
 --
--- Name: ranking_submissions ranking_submissions_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: ranking_submissions ranking_submissions_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.ranking_submissions
@@ -1932,7 +2104,7 @@ ALTER TABLE ONLY public.ranking_submissions
 
 
 --
--- Name: research_observations research_observations_related_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: research_observations research_observations_related_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.research_observations
@@ -1940,7 +2112,7 @@ ALTER TABLE ONLY public.research_observations
 
 
 --
--- Name: research_observations research_observations_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: research_observations research_observations_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.research_observations
@@ -1948,7 +2120,7 @@ ALTER TABLE ONLY public.research_observations
 
 
 --
--- Name: session_analytics session_analytics_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: session_analytics session_analytics_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_analytics
@@ -1956,7 +2128,7 @@ ALTER TABLE ONLY public.session_analytics
 
 
 --
--- Name: session_metrics_realtime session_metrics_realtime_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: session_metrics_realtime session_metrics_realtime_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.session_metrics_realtime
@@ -1964,7 +2136,7 @@ ALTER TABLE ONLY public.session_metrics_realtime
 
 
 --
--- Name: shape_inventory shape_inventory_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shape_inventory shape_inventory_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.shape_inventory
@@ -1972,7 +2144,7 @@ ALTER TABLE ONLY public.shape_inventory
 
 
 --
--- Name: shape_inventory shape_inventory_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: shape_inventory shape_inventory_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.shape_inventory
@@ -1980,7 +2152,7 @@ ALTER TABLE ONLY public.shape_inventory
 
 
 --
--- Name: transactions transactions_buyer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: transactions transactions_buyer_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.transactions
@@ -1988,7 +2160,7 @@ ALTER TABLE ONLY public.transactions
 
 
 --
--- Name: transactions transactions_seller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: transactions transactions_seller_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.transactions
@@ -1996,7 +2168,7 @@ ALTER TABLE ONLY public.transactions
 
 
 --
--- Name: transactions transactions_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: transactions transactions_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.transactions
@@ -2004,7 +2176,7 @@ ALTER TABLE ONLY public.transactions
 
 
 --
--- Name: wordguessing_chat_history wordguessing_chat_history_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: wordguessing_chat_history wordguessing_chat_history_participant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.wordguessing_chat_history
@@ -2012,7 +2184,7 @@ ALTER TABLE ONLY public.wordguessing_chat_history
 
 
 --
--- Name: wordguessing_chat_history wordguessing_chat_history_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: wordguessing_chat_history wordguessing_chat_history_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.wordguessing_chat_history
@@ -2022,4 +2194,6 @@ ALTER TABLE ONLY public.wordguessing_chat_history
 --
 -- PostgreSQL database dump complete
 --
+
+\unrestrict FbfWS1zFxrQIIPXIuD5aa2luRUo9S0K2ifpzhLL4JugQ54rmHmU8ERrvnGXMfd8
 
