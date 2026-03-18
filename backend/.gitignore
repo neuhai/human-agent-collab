@@ -1,0 +1,9 @@
+# Action logs (session-specific)
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/
+.venv/
