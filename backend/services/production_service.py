@@ -4,7 +4,9 @@ Periodically checks in_production items and moves completed items to inventory.
 """
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+
+from functions import parse_iso_timestamp_utc
 from websocket.handlers import broadcast_participant_update
 import routes.session as session_module
 
@@ -70,7 +72,7 @@ class ProductionService:
             
             # Update session storage after modifications
             if updated:
-                sessions[session_key] = session
+                session_module.commit_session(session_key, session)
                 session_id = session.get('session_id') or session_key
                 broadcast_participant_update(
                     session_id=session_id,
@@ -93,7 +95,7 @@ class ProductionService:
         if not isinstance(in_production, list) or len(in_production) == 0:
             return False
         
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         completed_items = []
         remaining_items = []
         
@@ -109,7 +111,7 @@ class ProductionService:
                 continue
             
             try:
-                completion_time = datetime.fromisoformat(completion_time_str)
+                completion_time = parse_iso_timestamp_utc(str(completion_time_str))
                 if now >= completion_time:
                     # Production is complete
                     completed_items.append(item)

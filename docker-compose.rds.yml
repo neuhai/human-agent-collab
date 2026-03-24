@@ -1,0 +1,34 @@
+# Backend + frontend only (use with AWS RDS or any external Postgres).
+# Usage: docker compose -f docker-compose.rds.yml --env-file .env up --build
+# Ensure .env sets DATABASE_URL (or PGHOST/PGUSER/PGPASSWORD/PGDATABASE).
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    env_file:
+      - path: .env
+        required: false
+      - path: backend/.env
+        required: false
+    volumes:
+      - ./backend/logs:/app/logs
+      - ./backend/uploads:/app/uploads
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

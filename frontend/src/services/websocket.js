@@ -9,10 +9,16 @@ export function initWebSocket() {
     return socket
   }
 
-  // Connect to backend Socket.IO server
-  // In development, this would typically be 'http://localhost:5000'
-  // In production, use your actual backend URL
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000'
+  // Socket.IO URL: explicit VITE_BACKEND_URL, else Vite dev -> Flask :5000, production build -> same origin (e.g. Docker nginx)
+  const envUrl = import.meta.env.VITE_BACKEND_URL
+  const backendUrl =
+    envUrl !== undefined && envUrl !== ''
+      ? envUrl
+      : import.meta.env.DEV
+        ? 'http://localhost:5000'
+        : typeof window !== 'undefined'
+          ? window.location.origin
+          : 'http://localhost:5000'
   
   socket = io(backendUrl, {
     transports: ['websocket', 'polling'],

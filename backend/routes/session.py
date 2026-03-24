@@ -4,8 +4,14 @@ from flask import request, jsonify, Blueprint
 from datetime import datetime
 import uuid
 import os
+import json
 from werkzeug.utils import secure_filename
-from config.experiments import get_experiment_by_id, EXPERIMENTS
+from config.experiments import get_experiment_by_id, EXPERIMENTS, PARTICIPANTS
+
+try:
+    import yaml
+except Exception:
+    yaml = None
 
 # Create a blueprint for session routes
 session_bp = Blueprint('session', __name__)
@@ -17,8 +23,314 @@ def get_experiments():
     """Return experiment configs - frontend uses this for setup UI structure."""
     return jsonify(EXPERIMENTS), 200
 
-# In-memory storage for sessions (in production, use a database)
+
+@session_bp.route('/api/participants/templates', methods=['GET'])
+def get_participant_templates():
+    """Return participant templates keyed by experiment id."""
+    return jsonify(_get_participant_templates_map()), 200
+
+
+def _get_participant_templates_map():
+    """
+    PARTICIPANTS is stored as a one-item list containing {experiment_id: [template]}.
+    Return a direct dict mapping experiment_id -> [template].
+    """
+    if not isinstance(PARTICIPANTS, list) or not PARTICIPANTS:
+        return {}
+    first = PARTICIPANTS[0]
+    return first if isinstance(first, dict) else {}
+
+
+def _extract_schema_keys(node, path=''):
+    """
+    Flatten all keys from a nested object into dotted paths.
+    Used to compare uploaded config keys against backend canonical schema.
+    """
+    keys = set()
+    if isinstance(node, dict):
+        for k, v in node.items():
+            key_path = f'{path}.{k}' if path else str(k)
+            keys.add(key_path)
+            keys.update(_extract_schema_keys(v, key_path))
+    elif isinstance(node, list):
+        for idx, item in enumerate(node):
+            list_path = f'{path}[{idx}]'
+            keys.add(list_path)
+            keys.update(_extract_schema_keys(item, list_path))
+    return keys
+
+
+def _try_parse_uploaded_config(content_text, file_name):
+    ext = os.path.splitext(file_name or '')[1].lower()
+    parse_errors = []
+
+    # Try JSON first (many users upload json even with non-json extension)
+    try:
+        return json.loads(content_text), None
+    except Exception as e:
+        parse_errors.append(f'JSON parse failed: {e}')
+
+    # Fallback to YAML when available
+    if ext in ['.yaml', '.yml'] and yaml is not None:
+        try:
+            return yaml.safe_load(content_text), None
+        except Exception as e:
+            parse_errors.append(f'YAML parse failed: {e}')
+
+    if ext in ['.yaml', '.yml'] and yaml is None:
+        parse_errors.append('YAML parser not installed on server (PyYAML missing)')
+
+    return None, '; '.join(parse_errors)
+
+
+def _build_validation_result(uploaded_config):
+    errors = []
+    warnings = []
+
+    if not isinstance(uploaded_config, dict):
+        errors.append({
+            'path': 'root',
+            'message': 'Config root must be an object/dictionary.'
+        })
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+
+    # Supported upload structure:
+    # {
+    #   "experiment": {...},
+    #   "participant": {...} | "participants": {...}
+    # }
+    experiment = uploaded_config.get('experiment')
+    participant = uploaded_config.get('participant', uploaded_config.get('participants'))
+
+    if experiment is None:
+        errors.append({
+            'path': 'experiment',
+            'message': 'Missing required key: experiment'
+        })
+    if participant is None:
+        errors.append({
+            'path': 'participant',
+            'message': 'Missing required key: participant (or participants)'
+        })
+    if errors:
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+
+    if not isinstance(experiment, dict):
+        errors.append({
+            'path': 'experiment',
+            'message': 'experiment must be an object.'
+        })
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+    if not isinstance(participant, dict):
+        errors.append({
+            'path': 'participant',
+            'message': 'participant must be an object keyed by experiment id.'
+        })
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+
+    exp_id = experiment.get('id')
+    if not exp_id:
+        errors.append({
+            'path': 'experiment.id',
+            'message': 'experiment.id is required.'
+        })
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+
+    canonical_experiment = get_experiment_by_id(exp_id)
+    canonical_participants = _get_participant_templates_map()
+    canonical_participant_template = canonical_participants.get(exp_id)
+
+    if not canonical_experiment:
+        errors.append({
+            'path': 'experiment.id',
+            'message': f'Unknown experiment id: {exp_id}'
+        })
+    if canonical_participant_template is None:
+        errors.append({
+            'path': f'participant.{exp_id}',
+            'message': f'No canonical participant template found for experiment id: {exp_id}'
+        })
+    if errors:
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+
+    participant_for_exp = participant.get(exp_id)
+    if participant_for_exp is None:
+        errors.append({
+            'path': f'participant.{exp_id}',
+            'message': f'participant must include key "{exp_id}" to match experiment.id.'
+        })
+        return {
+            'valid': False,
+            'errors': errors,
+            'warnings': warnings,
+            'normalized_config': None
+        }
+
+    # Validate required high-level keys from canonical experiment
+    required_experiment_keys = ['id', 'name', 'params', 'interaction', 'participant_settings', 'interface']
+    for key in required_experiment_keys:
+        if key not in experiment:
+            errors.append({
+                'path': f'experiment.{key}',
+                'message': f'Missing required key: experiment.{key}'
+            })
+
+    # Schema compatibility check (key-level): detect unknown keys and missing canonical keys
+    canonical_exp_keys = _extract_schema_keys(canonical_experiment)
+    uploaded_exp_keys = _extract_schema_keys(experiment)
+    missing_exp_keys = sorted(k for k in canonical_exp_keys if k not in uploaded_exp_keys)
+    unknown_exp_keys = sorted(k for k in uploaded_exp_keys if k not in canonical_exp_keys)
+
+    for k in missing_exp_keys[:30]:
+        errors.append({
+            'path': f'experiment.{k}',
+            'message': 'Missing key compared with backend canonical experiment config.'
+        })
+    if len(missing_exp_keys) > 30:
+        warnings.append(f'{len(missing_exp_keys) - 30} additional missing experiment keys omitted.')
+
+    for k in unknown_exp_keys[:30]:
+        warnings.append(f'Unknown experiment key (not in canonical schema): {k}')
+    if len(unknown_exp_keys) > 30:
+        warnings.append(f'{len(unknown_exp_keys) - 30} additional unknown experiment keys omitted.')
+
+    # Participant schema check (for the selected experiment)
+    canonical_participant_keys = _extract_schema_keys(canonical_participant_template)
+    uploaded_participant_keys = _extract_schema_keys(participant_for_exp)
+    missing_participant_keys = sorted(k for k in canonical_participant_keys if k not in uploaded_participant_keys)
+    unknown_participant_keys = sorted(k for k in uploaded_participant_keys if k not in canonical_participant_keys)
+
+    for k in missing_participant_keys[:30]:
+        errors.append({
+            'path': f'participant.{exp_id}.{k}',
+            'message': 'Missing key compared with backend canonical participant template.'
+        })
+    if len(missing_participant_keys) > 30:
+        warnings.append(f'{len(missing_participant_keys) - 30} additional missing participant keys omitted.')
+
+    for k in unknown_participant_keys[:30]:
+        warnings.append(f'Unknown participant key (not in canonical schema): {k}')
+    if len(unknown_participant_keys) > 30:
+        warnings.append(f'{len(unknown_participant_keys) - 30} additional unknown participant keys omitted.')
+
+    valid = len(errors) == 0
+
+    # "Auto-fix": when valid, normalize to canonical skeleton + user provided values
+    # (deep merge semantics are intentionally simple for now)
+    normalized = {
+        'experiment': experiment,
+        'participant': {
+            exp_id: participant_for_exp
+        }
+    } if valid else None
+
+    return {
+        'valid': valid,
+        'errors': errors,
+        'warnings': warnings,
+        'normalized_config': normalized
+    }
+
+
+@session_bp.route('/api/experiments/validate-upload', methods=['POST'])
+def validate_uploaded_experiment_config():
+    """
+    Validate uploaded custom experiment config against backend canonical config.
+    Request JSON:
+      {
+        "fileName": "...",
+        "content": "raw file text"
+      }
+    """
+    try:
+        data = request.get_json() or {}
+        file_name = data.get('fileName', '')
+        content = data.get('content', '')
+
+        if not content or not isinstance(content, str):
+            return jsonify({
+                'valid': False,
+                'errors': [{'path': 'content', 'message': 'content is required and must be a string.'}],
+                'warnings': []
+            }), 400
+
+        parsed, parse_error = _try_parse_uploaded_config(content, file_name)
+        if parse_error:
+            return jsonify({
+                'valid': False,
+                'errors': [{'path': 'file', 'message': parse_error}],
+                'warnings': []
+            }), 400
+
+        result = _build_validation_result(parsed)
+        status = 200 if result.get('valid') else 422
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({
+            'valid': False,
+            'errors': [{'path': 'server', 'message': str(e)}],
+            'warnings': []
+        }), 500
+
+# In-memory storage for sessions (also persisted to PostgreSQL when configured)
 sessions = {}
+
+
+def commit_session(session_key: str, session_dict: dict) -> None:
+    """Store session in memory and upsert to database (full JSON snapshot)."""
+    sessions[session_key] = session_dict
+    try:
+        from services.db import persist_research_session
+
+        persist_research_session(session_dict)
+    except Exception as e:
+        print(f'[Session] DB persist: {e}')
+
+
+def hydrate_sessions_from_db() -> None:
+    """Load saved sessions into memory on startup."""
+    try:
+        from services.db import is_db_configured, load_all_research_sessions
+
+        if not is_db_configured():
+            return
+        loaded = load_all_research_sessions()
+        for sid, s in loaded.items():
+            sessions[sid] = s
+        if loaded:
+            print(f'[Session] Loaded {len(loaded)} session(s) from database')
+    except Exception as e:
+        print(f'[Session] hydrate from DB failed: {e}')
 
 # Create a new session
 @session_bp.route('/api/sessions', methods=['POST'])
@@ -64,8 +376,8 @@ def create_session():
         }
         
         # Store session
-        sessions[session_id] = session
-        
+        commit_session(session_id, session)
+
         # Return session ID as JSON object for better compatibility
         return jsonify({'session_id': session_id}), 201
         
@@ -221,7 +533,7 @@ def update_session(session_identifier):
                 # Update participants list and broadcast if any agents were registered
                 if agents_registered:
                     found_session['participants'] = updated_participants
-                    sessions[session_key] = found_session
+                    commit_session(session_key, found_session)
                     broadcast_participant_update(
                         session_id=session_id,
                         participants=updated_participants,
@@ -351,8 +663,8 @@ def update_session(session_identifier):
                 traceback.print_exc()
         
         # Update the session in storage
-        sessions[session_key] = found_session
-        
+        commit_session(session_key, found_session)
+
         # 如果刚刚重算了 participants，则通过 websocket 广播给该 session 的所有客户端
         # Also broadcast if interaction was updated (even if participants weren't recalculated)
         should_broadcast = updated_participants is not None or ui_related_changed
@@ -409,10 +721,17 @@ def delete_session(session_id):
         
         if not found_session:
             return jsonify({'error': 'Session not found'}), 404
-        
+
+        try:
+            from services.db import delete_research_session
+
+            delete_research_session(found_session.get('session_id') or session_key)
+        except Exception as e:
+            print(f'[Session] DB delete: {e}')
+
         # Delete session
         del sessions[session_key]
-        
+
         return jsonify({'message': 'Session deleted successfully'}), 200
         
     except Exception as e:
@@ -456,7 +775,7 @@ def update_session_status(session_identifier, new_status, started_at=None, remai
             found_session['remaining_seconds'] = remaining_seconds
         
         # Save session
-        sessions[session_key] = found_session
+        commit_session(session_key, found_session)
         
         # Start/stop agent runners based on status FIRST (before broadcasting)
         # This ensures online status is updated before we broadcast
@@ -484,11 +803,11 @@ def update_session_status(session_identifier, new_status, started_at=None, remai
                     elif new_status == 'paused' and old_status == 'running':
                         # Mark as offline when paused (agent runner will pause automatically)
                         participant['status'] = 'offline'
-                        sessions[session_key] = found_session
+                        commit_session(session_key, found_session)
                     elif new_status == 'running' and old_status == 'paused':
                         # Mark as online when resuming (agent runner will resume automatically)
                         participant['status'] = 'online'
-                        sessions[session_key] = found_session
+                        commit_session(session_key, found_session)
             
             # Re-fetch participants list after agent runner updates
             found_session = sessions[session_key]
@@ -580,7 +899,7 @@ def start_session(session_identifier):
             found_session['remaining_seconds'] = duration_seconds
             found_session['duration_minutes'] = duration_minutes
         
-        sessions[session_key] = found_session
+        commit_session(session_key, found_session)
         
         # Start timer service (unless delay_timer is True)
         if not delay_timer:
@@ -775,7 +1094,7 @@ def reset_session(session_identifier):
         except Exception as e:
             print(f'[Session] Error resetting participants: {e}')
         
-        sessions[session_key] = found_session
+        commit_session(session_key, found_session)
         
         # Broadcast update
         try:
@@ -908,7 +1227,7 @@ def upload_essays(session_identifier):
             updated_participants.append(participant)
         
         found_session['participants'] = updated_participants
-        sessions[session_key] = found_session
+        commit_session(session_key, found_session)
         
         # Broadcast update to all participants
         try:
@@ -1014,7 +1333,7 @@ def upload_maps(session_identifier):
             params['maps'] = session_maps
         else:
             found_session['params'] = {'maps': session_maps}
-        sessions[session_key] = found_session
+        commit_session(session_key, found_session)
 
         return jsonify({
             'success': True,

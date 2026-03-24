@@ -10,14 +10,32 @@ from __future__ import annotations
 import random
 import time
 from typing import Any, Callable, Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+
+def parse_iso_timestamp_utc(s: str) -> datetime:
+    """
+    Parse completion/start timestamps for shape production.
+    Strings ending in Z are UTC. Naive ISO strings (legacy) are interpreted as UTC so
+    they match Docker servers and align with browser Date parsing when Z is used.
+    """
+    if not isinstance(s, str) or not s.strip():
+        raise ValueError("empty timestamp")
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _get_session_param_value(session: dict, path: str) -> Any:
     """
     Minimal resolver for Session.Params.* paths.
-    Matches the backend session schema where session['params'] is a list of dicts:
-      [{'Cluster Name': [ {label,type,default,path,value?}, ... ]}, ...]
+    Supports:
+    - Flat dict on session['params'] (researcher live-save from setup.vue)
+    - Nested list schema: [{'Cluster': [{path, value?, default}, ...]}, ...]
     """
     if not session or not isinstance(session, dict):
         return None
@@ -28,9 +46,14 @@ def _get_session_param_value(session: dict, path: str) -> Any:
     if len(parts) < 3 or parts[0] != "Session" or parts[1] != "Params":
         return None
 
+    param_name = parts[2]
     params = session.get("params")
 
-    # Fallback: if top-level params is not a list, try experiment_config.params
+    # Researcher UI stores params as a flat dict keyed by camelCase param name
+    if isinstance(params, dict) and param_name in params:
+        return params[param_name]
+
+    # Nested list: template or legacy session.params
     if not isinstance(params, list):
         exp_cfg = session.get("experiment_config")
         if isinstance(exp_cfg, dict) and isinstance(exp_cfg.get("params"), list):
@@ -170,14 +193,16 @@ def start_production(participant: dict, session: dict, shape: str) -> Dict[str, 
     if money < cost:
         return {'success': False, 'error': f'Insufficient funds. Need ${cost}, have ${money}'}
     
-    # Calculate completion time
-    completion_time = datetime.now() + timedelta(seconds=production_time)
-    completion_timestamp = completion_time.isoformat()
-    
+    # Completion instants in UTC with Z suffix so browsers parse as UTC, not local wall time
+    now = datetime.now(timezone.utc)
+    completion_time = now + timedelta(seconds=production_time)
+    completion_timestamp = completion_time.isoformat().replace("+00:00", "Z")
+    started_timestamp = now.isoformat().replace("+00:00", "Z")
+
     # Create production entry
     production_entry = {
         'shape': shape,
-        'started_at': datetime.now().isoformat(),
+        'started_at': started_timestamp,
         'completion_time': completion_timestamp,
         'production_time_seconds': production_time
     }

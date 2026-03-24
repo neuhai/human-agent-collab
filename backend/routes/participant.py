@@ -922,7 +922,7 @@ def register_participants(session_identifier):
         found_session['participants'] = participants_list
         
         # Update the session in storage
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast participant update via WebSocket (includes online status for agents)
         broadcast_participant_update(
@@ -1010,7 +1010,7 @@ def handle_start_production(session_identifier, participant_id):
         # Update participant in session
         participants_list[participant_index] = participant
         found_session['participants'] = participants_list
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast participant update via WebSocket
         broadcast_participant_update(
@@ -1110,7 +1110,7 @@ def handle_submit_shape(session_identifier, participant_id):
         participant['experiment_params'] = exp_params
         participants_list[participant_index] = participant
         found_session['participants'] = participants_list
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Recalculate interface config after updating experiment_params
         update_participant_experiment_params(participant, found_session)
@@ -1199,7 +1199,7 @@ def update_participant(session_identifier, participant_id):
         # Update session
         found_session['participants'] = participants_list
         
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast participant update via WebSocket
         broadcast_participant_update(
@@ -1368,7 +1368,7 @@ def handle_participant_login():
         update_participant_experiment_params(participant, found_session)
         
         # Update the session in storage (participant is already updated by reference)
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast participant update via WebSocket to notify all clients (including researcher interface)
         # Use session_id (UUID) if available, otherwise fall back to session_key
@@ -1442,7 +1442,7 @@ def update_map_progress(session_identifier, participant_id):
             participant['experiment_params'] = {}
         participant['experiment_params']['map_progress'] = map_progress
 
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
 
         broadcast_session_id = found_session.get('session_id') or session_key
         broadcast_participant_update(
@@ -1617,7 +1617,7 @@ def get_post_annotation_data(session_identifier):
         if not participant_ids and use_sample:
             participant_ids = ['a59bed79-e55a-417e-92cc-e0ff70fc8cf9', 'b6adf54e-f7e9-41f7-af48-a605c95f3d20']
 
-        # Load and merge all logs
+        # Load and merge all logs (local jsonl first, then PostgreSQL if empty)
         all_entries = []
         for pid in participant_ids:
             log_path = os.path.join(logs_dir, f'{pid}.jsonl')
@@ -1633,6 +1633,13 @@ def get_post_annotation_data(session_identifier):
                         all_entries.append(entry)
             except Exception as e:
                 print(f'[PostAnnotation] Error reading {log_path}: {e}')
+
+        if not all_entries:
+            try:
+                from services.db import load_session_logs
+                all_entries = load_session_logs(session_id)
+            except Exception as e:
+                print(f'[PostAnnotation] DB load: {e}')
 
         # Sort by timestamp
         all_entries.sort(key=lambda e: e.get('timestamp', ''))
@@ -1675,10 +1682,16 @@ def get_post_annotation_data(session_identifier):
             if pid not in participant_names:
                 participant_names[pid] = pid[:8] + '...'
 
-        # Annotation moments: current participant's actions that have screenshots (from filtered)
+        try:
+            from services.s3_storage import resolve_s3_fields_in_entry
+            filtered_entries = [resolve_s3_fields_in_entry(dict(e)) for e in filtered_entries]
+        except Exception as ex:
+            print(f'[PostAnnotation] S3 resolve: {ex}')
+
+        # Annotation moments: current participant's actions that have screenshots (from filtered, after S3 presign)
         annotation_moments = [e for e in filtered_entries if e.get('participant_id') == participant_id and e.get('screenshot')]
 
-        # Base URL for log files
+        # Base URL for log files (local files/ paths); s3:// assets are expanded to presigned HTTPS above
         files_base = f'/api/sessions/{session_id}/log_files'
 
         # Get session name - try from session, or from first log entry
@@ -1689,24 +1702,80 @@ def get_post_annotation_data(session_identifier):
         if not session_name and all_entries:
             session_name = all_entries[0].get('session_name', '')
 
-        # Load saved annotations from file (logs/{session_id}/post_annotations_{participant_id}.json)
+        # Post-session saved answers: PostgreSQL first, then local JSON fallback
         saved_annotations = {}
-        ann_path = os.path.join(LOGS_BASE_DIR, session_id, f'post_annotations_{participant_id}.json')
-        if os.path.isfile(ann_path):
-            try:
-                with open(ann_path, 'r', encoding='utf-8') as f:
-                    saved_annotations = json.load(f)
-            except Exception as e:
-                print(f'[PostAnnotation] Error reading annotations: {e}')
+        try:
+            from services.db import load_post_session_annotations
+
+            db_saved = load_post_session_annotations(session_id, participant_id)
+            if db_saved:
+                saved_annotations = db_saved
+        except Exception as e:
+            print(f'[PostAnnotation] DB post_annotations: {e}')
+        if not saved_annotations:
+            ann_path = os.path.join(LOGS_BASE_DIR, session_id, f'post_annotations_{participant_id}.json')
+            if os.path.isfile(ann_path):
+                try:
+                    with open(ann_path, 'r', encoding='utf-8') as f:
+                        saved_annotations = json.load(f)
+                except Exception as e:
+                    print(f'[PostAnnotation] Error reading annotations file: {e}')
+
+        in_session_annotations = []
+        try:
+            from services.db import load_in_session_annotations
+
+            in_session_annotations = load_in_session_annotations(session_id, participant_id)
+        except Exception as e:
+            print(f'[PostAnnotation] DB in_session: {e}')
+
+        # Fallback: in-memory session snapshot (no DB / dev) has annotation_data
+        if not in_session_annotations and found_session:
+            raw = (found_session.get('annotation_data') or {}).get(participant_id)
+            if isinstance(raw, list) and raw:
+                for item in sorted(raw, key=lambda x: x.get('checkpoint', 0)):
+                    in_session_annotations.append(
+                        {
+                            'checkpoint_index': item.get('checkpoint'),
+                            'transcription': (item.get('transcription') or ''),
+                            'created_at': item.get('created_at') or '',
+                        }
+                    )
+
+        # Session timing for post-annotation UI (progress % of action vs duration)
+        session_duration_seconds = None
+        session_started_at = None
+        if found_session:
+            session_started_at = found_session.get('started_at')
+            dm = get_value_from_session_params(found_session, 'Session.Params.duration')
+            if dm is None:
+                dm = found_session.get('duration_minutes')
+            if dm is not None:
+                try:
+                    session_duration_seconds = int(float(dm)) * 60
+                except (TypeError, ValueError):
+                    session_duration_seconds = None
+
+        saved_annotation_asset_urls = {}
+        try:
+            from services.s3_storage import presign_saved_annotation_asset_urls
+
+            saved_annotation_asset_urls = presign_saved_annotation_asset_urls(saved_annotations)
+        except Exception as e:
+            print(f'[PostAnnotation] presign saved assets: {e}')
 
         return jsonify({
             'merged_logs': filtered_entries,
             'annotation_moments': annotation_moments,
             'saved_annotations': saved_annotations,
+            'saved_annotation_asset_urls': saved_annotation_asset_urls,
+            'in_session_annotations': in_session_annotations,
             'participant_names': participant_names,
             'files_base': files_base,
             'session_id': session_id,
             'session_name': session_name,
+            'session_duration_seconds': session_duration_seconds,
+            'session_started_at': session_started_at,
         })
     except Exception as e:
         import traceback
@@ -1736,10 +1805,74 @@ def save_post_annotations(session_identifier, participant_id):
         with open(ann_path, 'w', encoding='utf-8') as f:
             json.dump(annotations, f, ensure_ascii=False, indent=2)
 
+        try:
+            from services.db import upsert_post_session_annotations
+
+            upsert_post_session_annotations(session_id, participant_id, annotations)
+        except Exception as db_err:
+            print(f'[PostAnnotation] DB upsert post_annotations: {db_err}')
+
         return jsonify({'success': True})
     except Exception as e:
         import traceback
         traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# Presigned S3 PUT for post-session annotation assets (browser uploads directly to S3; bytes do not pass through this app)
+@participant_bp.route(
+    '/api/sessions/<path:session_identifier>/participants/<participant_id>/post_annotation_presign',
+    methods=['POST'],
+)
+def post_annotation_presign(session_identifier, participant_id):
+    try:
+        import re
+        from urllib.parse import unquote
+
+        from services import s3_storage
+
+        session_id = unquote(session_identifier)
+        data = request.get_json() or {}
+        action_id = (data.get('action_id') or '').strip()
+        asset = (data.get('asset') or '').strip()
+        content_type = (data.get('content_type') or '').strip() or 'application/octet-stream'
+
+        uuid_pat = re.compile(
+            r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+        )
+        if not uuid_pat.match(action_id):
+            return jsonify({'error': 'action_id must be a UUID'}), 400
+        if asset not in ('screenshot', 'html_snapshot'):
+            return jsonify({'error': 'asset must be screenshot or html_snapshot'}), 400
+
+        if asset == 'screenshot':
+            filename = 'screenshot.jpg'
+            if 'image/' not in content_type:
+                content_type = 'image/jpeg'
+        else:
+            filename = 'html_snapshot.html'
+            if 'html' not in content_type and 'text/' not in content_type:
+                content_type = 'text/html; charset=utf-8'
+
+        if not s3_storage.is_s3_configured():
+            return jsonify({'error': 'S3 is not configured on the server'}), 503
+
+        key = s3_storage.build_post_annotation_asset_key(session_id, participant_id, action_id, filename)
+        upload_url = s3_storage.presign_put_url(key, content_type)
+        if not upload_url:
+            return jsonify({'error': 'Could not create upload URL'}), 500
+        s3_uri = s3_storage.s3_uri_for_key(key)
+        view_url = s3_storage.presign_get_url(s3_uri)
+        return jsonify(
+            {
+                'upload_url': upload_url,
+                's3_uri': s3_uri,
+                'key': key,
+                'method': 'PUT',
+                'view_url': view_url,
+            }
+        ), 200
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
@@ -1879,7 +2012,7 @@ def submit_trade(session_identifier, participant_id):
         
         # Add to pending offers
         found_session['pending_offers'].append(offer)
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast update to both participants
         broadcast_participant_update(
@@ -1988,7 +2121,7 @@ def submit_investment(session_identifier, participant_id):
                 break
         
         found_session['participants'] = participants_list
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Log the update for debugging
         print(f'[submit_investment] Updated participant {participant_id}:')
@@ -2326,7 +2459,7 @@ def respond_to_offer(session_identifier, participant_id):
         # Update session
         found_session['pending_offers'] = pending_offers
         found_session['participants'] = participants_list
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast update
         broadcast_participant_update(
@@ -2437,7 +2570,7 @@ def cancel_offer(session_identifier, participant_id):
         
         # Update session
         found_session['pending_offers'] = pending_offers
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Broadcast update
         broadcast_participant_update(
@@ -2553,7 +2686,7 @@ def submit_essay_rank(session_identifier, participant_id):
                 break
         
         found_session['participants'] = participants_list
-        sessions[session_key] = found_session
+        session_module.commit_session(session_key, found_session)
         
         # Log the update for debugging
         print(f'[submit_essay_rank] Updated participant {participant_id}:')

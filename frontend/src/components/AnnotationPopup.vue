@@ -10,6 +10,11 @@ const props = defineProps({
     type: Number,
     default: 0
   },
+  /** After this user submitted; session stays paused until all humans submit */
+  waitingForPartners: {
+    type: Boolean,
+    default: false
+  },
   /** When true, show a close button (for test page) */
   allowClose: {
     type: Boolean,
@@ -109,13 +114,16 @@ const handleClose = () => {
 </script>
 
 <template>
-  <div v-if="show" class="annotation-overlay" @click.self="allowClose ? handleClose() : null">
+  <div v-if="show" class="annotation-overlay" @click.self="allowClose && !waitingForPartners ? handleClose() : null">
     <div class="annotation-modal">
       <div class="annotation-header">
-        <h3>Quick Checking</h3>
-        <button v-if="allowClose" type="button" class="close-btn" @click="handleClose" :disabled="isSubmitting">×</button>
+        <h3>{{ waitingForPartners ? 'Please wait' : 'Quick Checking' }}</h3>
+        <button v-if="allowClose && !waitingForPartners" type="button" class="close-btn" @click="handleClose" :disabled="isSubmitting">×</button>
       </div>
-      <div class="annotation-body">
+      <div v-if="waitingForPartners" class="annotation-body annotation-waiting-body">
+        <p class="annotation-waiting-message">Waiting for your partner(s) to finish</p>
+      </div>
+      <div v-else class="annotation-body">
         <div class="annotation-questions">
           <ol>
             <li v-for="(q, i) in QUESTIONS" :key="i" class="question-item">{{ q }}</li>
@@ -229,6 +237,18 @@ const handleClose = () => {
 
 .annotation-body {
   padding: 24px;
+}
+
+.annotation-waiting-body {
+  text-align: center;
+  padding: 40px 24px;
+}
+
+.annotation-waiting-message {
+  margin: 0;
+  font-size: 17px;
+  color: #374151;
+  line-height: 1.5;
 }
 
 .annotation-questions {

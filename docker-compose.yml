@@ -1,0 +1,75 @@
+# Full stack: local Postgres + backend + frontend.
+# Copy .env.example -> .env and set OPENAI_API_KEY (or other LLM keys), POSTGRES_PASSWORD, etc.
+#
+# Use external DB only (e.g. RDS): docker compose -f docker-compose.rds.yml --env-file .env up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: humanagent-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-humanagent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/docker-init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-humanagent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  backend:
+    build: ./backend
+    container_name: humanagent-backend
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    env_file:
+      - path: .env
+        required: false
+      - path: backend/.env
+        required: false
+    environment:
+      # Default URL targets the bundled `postgres` service. Set DATABASE_URL in `.env` to use RDS instead.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:changeme@postgres:5432/humanagent}
+      PGSCHEMA: ${PGSCHEMA:-humanagent_collab}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-change-me-in-production}
+      # LLM / Azure / AWS: set via env_file (`.env`, `backend/.env`) only.
+      # Do not list them here — Compose `environment` overrides `env_file`, and
+      # `${VAR:-}` is resolved from the project root `.env` only, so values in
+      # `backend/.env` would be wiped (e.g. LLM stuck on mock).
+    volumes:
+      - ./backend/logs:/app/logs
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: humanagent-frontend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

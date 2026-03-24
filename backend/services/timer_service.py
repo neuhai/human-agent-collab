@@ -150,8 +150,9 @@ class TimerService:
         """Broadcast timer update via WebSocket"""
         try:
             from websocket.handlers import get_socketio
-            from routes.session import sessions
-            
+            from routes.session import commit_session, sessions
+            from services.annotation_service import check_and_force_trigger_annotation
+
             socketio = get_socketio()
             
             # Update session's remaining_seconds
@@ -167,8 +168,15 @@ class TimerService:
             
             if found_session:
                 found_session['remaining_seconds'] = self.remaining_seconds
-                sessions[session_key] = found_session
-            
+                commit_session(session_key, found_session)
+
+                # If no action has triggered annotation inside a checkpoint window,
+                # force trigger near the end of that window.
+                try:
+                    check_and_force_trigger_annotation(session_key, found_session, sessions)
+                except Exception as ann_err:
+                    print(f'[TimerService] Error in forced annotation check: {ann_err}')
+
             # Broadcast timer update
             socketio.emit('timer_update', {
                 'session_id': self.session_id,
@@ -190,7 +198,7 @@ class TimerService:
     def _on_timeout(self):
         """Called when timer reaches zero"""
         try:
-            from routes.session import sessions
+            from routes.session import commit_session, sessions
             from websocket.handlers import broadcast_participant_update, get_socketio
             
             # Emit final timer_update with remaining_seconds=0 so frontend receives it
@@ -221,8 +229,8 @@ class TimerService:
                 # Auto-pause session when timer expires
                 found_session['status'] = 'paused'
                 found_session['remaining_seconds'] = 0
-                sessions[session_key] = found_session
-                
+                commit_session(session_key, found_session)
+
                 # For hiddenprofile experiment, if no human participants, trigger final vote for all agents
                 experiment_type = found_session.get('experiment_type')
                 if experiment_type == 'hiddenprofile':

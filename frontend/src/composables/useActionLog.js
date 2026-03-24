@@ -5,14 +5,9 @@
 import { captureActionContext } from './useActionCapture.js'
 
 /**
- * Log an action to the backend.
- * @param {Object} params
- * @param {string} params.actionType - e.g. 'map_tool_click', 'map_draw_stop'
- * @param {string} params.actionContent - e.g. 'brush', 'eraser', 'reset'
- * @param {string} [params.mapImage] - base64 image (for follower map task, image map)
- * @param {Object} [params.metadata] - extra data (e.g. filledCells for txt map)
+ * Internal: screenshot + HTML snapshot + POST. Kept async for heavy html2canvas work.
  */
-export async function logActionToBackend({ actionType, actionContent, mapImage, metadata = {} }) {
+async function logActionToBackendAsync({ actionType, actionContent, mapImage, metadata = {} }) {
   const sessionId = sessionStorage.getItem('session_id') || sessionStorage.getItem('session_code') || sessionStorage.getItem('session_name')
   const participantId = sessionStorage.getItem('participant_id')
   if (!sessionId || !participantId) {
@@ -50,4 +45,20 @@ export async function logActionToBackend({ actionType, actionContent, mapImage, 
   } catch (e) {
     console.warn('[ActionLog] Failed to log action:', e)
   }
+}
+
+/**
+ * Log an action to the backend (non-blocking for UI).
+ * Defers work to the next animation frame so clicks (e.g. tool switch) paint before html2canvas.
+ *
+ * @param {Object} params
+ * @param {string} params.actionType - e.g. 'map_tool_click', 'map_draw_stop'
+ * @param {string} params.actionContent - e.g. 'brush', 'eraser', 'reset'
+ * @param {string} [params.mapImage] - base64 image (for follower map task, image map)
+ * @param {Object} [params.metadata] - extra data (e.g. filledCells for txt map)
+ */
+export function logActionToBackend(params) {
+  requestAnimationFrame(() => {
+    void logActionToBackendAsync(params)
+  })
 }

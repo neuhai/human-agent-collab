@@ -1,9 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const router = useRouter()
 
 // Session/participant from route or sessionStorage
 const sessionId = ref(route.query.session_id || sessionStorage.getItem('session_id') || '')
@@ -15,15 +14,23 @@ const mergedLogs = ref([])
 const annotationMoments = ref([])
 const participantNames = ref({})
 const filesBase = ref('')
+/** Presigned GET URLs for screenshot_s3 / html_snapshot_s3 in saved_annotations (from API) */
+const savedAnnotationAssetUrls = ref({})
 const loading = ref(true)
 const error = ref('')
 
-// Session start time (first log timestamp) for relative time calculation
+// Session start time (API started_at or first log) for relative time calculation
 const sessionStartTime = ref(null)
+/** Total session length in seconds (from API Session.Params.duration) */
+const sessionDurationSeconds = ref(null)
+/** In-session checkpoint transcriptions from DB or session snapshot */
+const inSessionAnnotations = ref([])
 
 // Current annotation index
 const currentMomentIndex = ref(0)
 const currentMoment = computed(() => annotationMoments.value[currentMomentIndex.value] || null)
+/** Set true after user completes the last moment and clicks Next */
+const annotationFinished = ref(false)
 
 // Format timestamp to MM:SS (relative to session start)
 function formatTime(ts) {
@@ -64,11 +71,20 @@ function getActionTypeDisplay(actionType) {
     .join(' ')
 }
 
-// Screenshot URL for current moment
+// Screenshot URL: post-annotation S3 (presigned) > log replay (files / presigned from merged log)
 const screenshotUrl = computed(() => {
   const m = currentMoment.value
-  if (!m?.screenshot || !filesBase.value) return null
-  const filename = m.screenshot.startsWith('files/') ? m.screenshot.slice(6) : m.screenshot
+  if (!m) return null
+  const aid = m.action_id
+  const apiUrls = savedAnnotationAssetUrls.value[aid]
+  if (apiUrls?.screenshot_s3) return apiUrls.screenshot_s3
+  const saved = annotations.value[aid]
+  if (saved?.screenshot_s3?.startsWith('http')) return saved.screenshot_s3
+  const s = m.screenshot
+  if (!s) return null
+  if (s.startsWith('http://') || s.startsWith('https://')) return s
+  if (!filesBase.value) return null
+  const filename = s.startsWith('files/') ? s.slice(6) : s
   return `${filesBase.value}/${filename}`
 })
 
@@ -95,8 +111,50 @@ const Q4_REASONS = [
 // Confirmed state per question
 const confirmed = ref({ q1: false, q2: false, q3: false })
 
-// In-game thoughts (placeholder - not in log data yet)
-const inGameThoughts = ref('')
+/**
+ * Map post-session action time (% of session duration) to 1st / 2nd / 3rd in-session annotation
+ * by checkpoint_index 0, 1, 2: <33% → first; 33%–66% → second; >66% → third.
+ */
+function bucketIndexFromProgressPct(pct) {
+  if (pct < 33) return 0
+  if (pct <= 66) return 1
+  return 2
+}
+
+const selectedInSessionThought = computed(() => {
+  const m = currentMoment.value
+  const ann = inSessionAnnotations.value || []
+  if (!m?.timestamp || !sessionStartTime.value) {
+    return { transcription: '', timeLabel: '—' }
+  }
+  let dur = sessionDurationSeconds.value
+  if ((!dur || dur <= 0) && mergedLogs.value.length >= 2) {
+    const first = new Date(mergedLogs.value[0].timestamp).getTime()
+    const last = new Date(mergedLogs.value[mergedLogs.value.length - 1].timestamp).getTime()
+    if (last > first) dur = Math.floor((last - first) / 1000)
+  }
+  if (!dur || dur <= 0) {
+    return { transcription: '(Session duration unavailable; cannot map in-game thoughts.)', timeLabel: '—' }
+  }
+  const actionTime = new Date(m.timestamp).getTime()
+  const start = sessionStartTime.value.getTime()
+  const elapsedSec = (actionTime - start) / 1000
+  const pct = elapsedSec < 0 ? 0 : (elapsedSec / dur) * 100
+  const bucket = bucketIndexFromProgressPct(pct)
+  const list = [...ann].sort((a, b) => (Number(a.checkpoint_index) || 0) - (Number(b.checkpoint_index) || 0))
+  const match = list.find((x) => Number(x.checkpoint_index) === bucket)
+  if (!match?.transcription?.trim()) {
+    return { transcription: '(No in-session annotation recorded for this period.)', timeLabel: '—' }
+  }
+  const timeLabel = match.created_at ? formatTime(match.created_at) : '—'
+  return { transcription: match.transcription.trim(), timeLabel }
+})
+
+const inGameThoughtsDisplayLabel = computed(() => {
+  const t = selectedInSessionThought.value?.timeLabel
+  if (t && t !== '—') return `Your in-game thoughts at ${t}`
+  return 'Your in-game thoughts'
+})
 
 // Voice recording
 const isRecording = ref(false)
@@ -124,15 +182,26 @@ function loadData() {
       participantNames.value = data.participant_names || {}
       filesBase.value = data.files_base || ''
       sessionName.value = data.session_name || data.session_id || ''
+      savedAnnotationAssetUrls.value = data.saved_annotation_asset_urls || {}
+      inSessionAnnotations.value = data.in_session_annotations || []
+      sessionDurationSeconds.value =
+        data.session_duration_seconds != null && data.session_duration_seconds !== ''
+          ? Number(data.session_duration_seconds)
+          : null
       // Load saved annotations from file
       if (data.saved_annotations && typeof data.saved_annotations === 'object') {
         annotations.value = { ...data.saved_annotations }
       }
-      // Set session start time from first log entry
-      if (mergedLogs.value.length > 0 && mergedLogs.value[0].timestamp) {
+      // Session start: prefer server started_at, else first log
+      if (data.session_started_at) {
+        sessionStartTime.value = new Date(data.session_started_at)
+      } else if (mergedLogs.value.length > 0 && mergedLogs.value[0].timestamp) {
         sessionStartTime.value = new Date(mergedLogs.value[0].timestamp)
+      } else {
+        sessionStartTime.value = null
       }
       currentMomentIndex.value = 0
+      annotationFinished.value = false
       loadCurrentMomentState()
     })
     .catch((err) => {
@@ -173,8 +242,6 @@ function loadCurrentMomentState() {
     q4Reasons.value = []
     confirmed.value = { q1: false, q2: false, q3: false }
   }
-  // Placeholder for in-game thoughts
-  inGameThoughts.value = 'I think my partner is guiding me to draw the route near the starting point.'
 }
 
 watch(currentMoment, () => loadCurrentMomentState(), { immediate: true })
@@ -192,12 +259,100 @@ function confirmQuestion(q) {
 function saveCurrentAnnotations() {
   const m = currentMoment.value
   if (!m) return
+  const prev = annotations.value[m.action_id] || {}
   annotations.value[m.action_id] = {
+    ...prev,
     q1: q1Text.value.trim(),
     q2: q2Text.value.trim(),
     q3: q3Text.value.trim(),
     q4: q4Value.value,
     q4Reasons: [...q4Reasons.value],
+  }
+}
+
+async function fetchPostAnnotationPresign(actionId, asset, contentType) {
+  const encSid = encodeURIComponent(sessionId.value)
+  const encPid = encodeURIComponent(participantId.value)
+  const res = await fetch(`/api/sessions/${encSid}/participants/${encPid}/post_annotation_presign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action_id: actionId, asset, content_type: contentType }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || 'presign failed')
+  return data
+}
+
+/** Browser -> S3 PUT (bytes do not go through our API). Stores s3:// URI in annotations. */
+async function uploadCurrentMomentScreenshotToS3IfNeeded() {
+  const m = currentMoment.value
+  if (!m?.action_id) return
+  const aid = m.action_id
+  const row = annotations.value[aid]
+  if (row?.screenshot_s3) return
+
+  let pres
+  try {
+    pres = await fetchPostAnnotationPresign(aid, 'screenshot', 'image/jpeg')
+  } catch (e) {
+    console.warn('[PostAnnotation] presign screenshot skipped:', e)
+    return
+  }
+  if (!pres?.upload_url) return
+
+  const img = document.querySelector('.replay-screenshot')
+  if (img && img.complete && img.naturalWidth) {
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0)
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.88))
+      if (blob) {
+        const put = await fetch(pres.upload_url, {
+          method: 'PUT',
+          body: blob,
+          headers: { 'Content-Type': 'image/jpeg' },
+        })
+        if (!put.ok) throw new Error('S3 PUT failed')
+        const prev = annotations.value[aid] || {}
+        annotations.value[aid] = { ...prev, screenshot_s3: pres.s3_uri }
+        if (pres.view_url) {
+          savedAnnotationAssetUrls.value = {
+            ...savedAnnotationAssetUrls.value,
+            [aid]: { ...(savedAnnotationAssetUrls.value[aid] || {}), screenshot_s3: pres.view_url },
+          }
+        }
+        return
+      }
+    } catch (e) {
+      console.warn('[PostAnnotation] canvas from replay img failed:', e)
+    }
+  }
+
+  try {
+    const html2canvas = (await import('html2canvas')).default
+    const el = document.getElementById('app') || document.body
+    const canvas = await html2canvas(el, { useCORS: true, allowTaint: true, scale: 1, logging: false })
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.88))
+    if (!blob) return
+    const put = await fetch(pres.upload_url, {
+      method: 'PUT',
+      body: blob,
+      headers: { 'Content-Type': 'image/jpeg' },
+    })
+    if (!put.ok) throw new Error('S3 PUT failed')
+    const prev = annotations.value[aid] || {}
+    annotations.value[aid] = { ...prev, screenshot_s3: pres.s3_uri }
+    if (pres.view_url) {
+      savedAnnotationAssetUrls.value = {
+        ...savedAnnotationAssetUrls.value,
+        [aid]: { ...(savedAnnotationAssetUrls.value[aid] || {}), screenshot_s3: pres.view_url },
+      }
+    }
+  } catch (e) {
+    console.warn('[PostAnnotation] html2canvas fallback failed:', e)
   }
 }
 
@@ -233,9 +388,9 @@ async function saveAnnotationsToFile() {
   }
 }
 
-function prevMoment() {
+async function prevMoment() {
   saveCurrentAnnotations()
-  saveAnnotationsToFile()
+  await saveAnnotationsToFile()
   if (currentMomentIndex.value > 0) {
     currentMomentIndex.value--
   }
@@ -264,16 +419,16 @@ function validateAllAnswered() {
   return true
 }
 
-function nextMoment() {
+async function nextMoment() {
   // Auto-confirm: save current inputs as annotations
   saveCurrentAnnotations()
   // All four questions required
   if (!validateAllAnswered()) return
-  saveAnnotationsToFile()
+  await saveAnnotationsToFile()
   if (currentMomentIndex.value < annotationMoments.value.length - 1) {
     currentMomentIndex.value++
   } else {
-    router.push('/login')
+    annotationFinished.value = true
   }
 }
 
@@ -352,6 +507,10 @@ onMounted(() => {
       <p>{{ error }}</p>
       <p class="hint">For testing with sample data, use: ?session_id=016c8aca-bac7-4f60-ae36-0ccc5504a1fb&participant_id=a59bed79-e55a-417e-92cc-e0ff70fc8cf9</p>
     </div>
+    <div v-else-if="annotationFinished" class="completion-state">
+      <p class="completion-title">Congrats! You've finished the annotation.</p>
+      <p class="completion-body">Thank you for your participation. You can close the window now.</p>
+    </div>
     <div v-else-if="annotationMoments.length === 0" class="empty-state">
       <p>No annotation moments found for this session.</p>
     </div>
@@ -394,8 +553,8 @@ onMounted(() => {
           <span class="time-highlight">{{ currentMoment ? formatTime(currentMoment.timestamp) : '00:00' }}</span>
         </h2>
         <div class="thoughts-box">
-          <label>Your in-game thoughts:</label>
-          <p>{{ inGameThoughts || '(No thoughts recorded)' }}</p>
+          <label>{{ inGameThoughtsDisplayLabel }}</label>
+          <p>{{ selectedInSessionThought.transcription || '(No thoughts recorded)' }}</p>
         </div>
 
         <!-- Q1 -->
@@ -519,10 +678,28 @@ onMounted(() => {
 
 .loading-state,
 .error-state,
-.empty-state {
+.empty-state,
+.completion-state {
   text-align: center;
   padding: 48px 24px;
   color: #666;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.completion-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+  margin: 0 0 16px 0;
+  line-height: 1.4;
+}
+
+.completion-body {
+  font-size: 16px;
+  color: #4b5563;
+  margin: 0;
+  line-height: 1.6;
 }
 
 .error-state .hint {

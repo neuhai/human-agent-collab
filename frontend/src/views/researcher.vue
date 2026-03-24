@@ -333,15 +333,27 @@ const FALLBACK_EXPERIMENTS = [
 ]
 
 const experiments = ref([...FALLBACK_EXPERIMENTS])
+const participantTemplates = ref({})
 
 // Load experiments from backend (single source of truth - includes Communication Media for all experiments)
 const loadExperiments = async () => {
   try {
-    const res = await fetch('/api/experiments')
-    if (res.ok) {
-      const data = await res.json()
+    const [experimentsRes, templatesRes] = await Promise.all([
+      fetch('/api/experiments'),
+      fetch('/api/participants/templates'),
+    ])
+
+    if (experimentsRes.ok) {
+      const data = await experimentsRes.json()
       if (Array.isArray(data) && data.length > 0) {
         experiments.value = data
+      }
+    }
+
+    if (templatesRes.ok) {
+      const templates = await templatesRes.json()
+      if (templates && typeof templates === 'object') {
+        participantTemplates.value = templates
       }
     }
   } catch (e) {
@@ -361,6 +373,24 @@ const selectedExperimentConfig = computed(() => {
 // Function to update selected experiment type (provided to child components)
 const updateSelectedExperimentType = (experimentId) => {
   selectedExperimentType.value = experimentId
+}
+
+const upsertExperimentConfig = (uploadedExperiment) => {
+  if (!uploadedExperiment || !uploadedExperiment.id) return
+  const index = experiments.value.findIndex(e => e.id === uploadedExperiment.id)
+  if (index >= 0) {
+    experiments.value[index] = uploadedExperiment
+  } else {
+    experiments.value.push(uploadedExperiment)
+  }
+}
+
+const upsertParticipantTemplate = (experimentId, uploadedTemplateArray) => {
+  if (!experimentId || !Array.isArray(uploadedTemplateArray)) return
+  participantTemplates.value = {
+    ...participantTemplates.value,
+    [experimentId]: uploadedTemplateArray,
+  }
 }
 
 // Tab management
@@ -399,9 +429,12 @@ const participantsMap = computed(() => {
 
 // Provide experiments and selected experiment info to child components
 provide('experiments', experiments)
+provide('participantTemplates', participantTemplates)
 provide('selectedExperimentType', selectedExperimentType)
 provide('selectedExperimentConfig', selectedExperimentConfig)
 provide('updateSelectedExperimentType', updateSelectedExperimentType)
+provide('upsertExperimentConfig', upsertExperimentConfig)
+provide('upsertParticipantTemplate', upsertParticipantTemplate)
 provide('isSessionCreated', isSessionCreated)
 provide('currentSessionId', currentSessionId)
 provide('currentSessionName', currentSessionName)

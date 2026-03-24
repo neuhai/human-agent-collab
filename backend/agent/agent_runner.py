@@ -11,7 +11,9 @@ import threading
 import time
 import json
 from typing import Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+
+from functions import parse_iso_timestamp_utc
 import routes.session as session_module
 from routes.participant import (
     find_session_by_identifier, 
@@ -542,7 +544,7 @@ Response:"""
             in_production = exp_params.get('in_production', [])
             if isinstance(in_production, list) and len(in_production) > 0:
                 production_items = []
-                now = datetime.now()
+                now = datetime.now(timezone.utc)
                 
                 for item in in_production:
                     if not isinstance(item, dict):
@@ -553,7 +555,7 @@ Response:"""
                         continue
                     
                     try:
-                        completion_time = datetime.fromisoformat(completion_time_str)
+                        completion_time = parse_iso_timestamp_utc(str(completion_time_str))
                         remaining_seconds = max(0, int((completion_time - now).total_seconds()))
                         
                         production_items.append({
@@ -1536,7 +1538,7 @@ def start_agent_runner(participant_id: str, session_id: str):
             
             if updated:
                 session['participants'] = participants
-                sessions[session_key] = session
+                session_module.commit_session(session_key, session)
                 
                 # Broadcast update
                 from websocket.handlers import broadcast_participant_update
@@ -1583,7 +1585,7 @@ def stop_agent_runner(participant_id: str, session_id: str):
                 
                 if updated:
                     session['participants'] = participants
-                    sessions[session_key] = session
+                    session_module.commit_session(session_key, session)
                     
                     # Broadcast update
                     from websocket.handlers import broadcast_participant_update

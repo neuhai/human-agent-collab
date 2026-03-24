@@ -41,6 +41,43 @@ const containerRef = ref(null)
 const isDrawing = ref(false)
 const lastCell = ref(null)
 
+/** Eraser radius in canvas pixel space (image resolution). */
+const eraserRadius = ref(16)
+const eraserPreview = ref({ visible: false, left: 0, top: 0, size: 0 })
+
+/** Image map: stack of full-canvas ImageData after each completed stroke (for undo). */
+const canvasUndoStack = ref([])
+const txtUndoStack = ref([])
+
+const pushCanvasUndoState = () => {
+  if (!canvasRef.value || !canvasCtx.value || mapType.value !== 'image') return
+  const c = canvasRef.value
+  try {
+    const data = canvasCtx.value.getImageData(0, 0, c.width, c.height)
+    canvasUndoStack.value.push(data)
+  } catch {
+    /* ignore */
+  }
+}
+
+const setsEqual = (a, b) => {
+  if (!a || !b || a.size !== b.size) return false
+  for (const x of a) if (!b.has(x)) return false
+  return true
+}
+
+const pushTxtUndoStateIfChanged = () => {
+  const last = txtUndoStack.value[txtUndoStack.value.length - 1]
+  if (setsEqual(last, filledCells.value)) return
+  txtUndoStack.value.push(new Set(filledCells.value))
+}
+
+const canUndo = computed(() => {
+  if (mapType.value === 'image') return canvasUndoStack.value.length > 1
+  if (mapType.value === 'txt') return txtUndoStack.value.length > 1
+  return false
+})
+
 /** Get current map image as base64 (follower, image map only). Exports at 2x resolution for clarity. */
 const getMapImage = () => {
   if (!props.showToolbox || mapType.value !== 'image' || !canvasRef.value) return null
@@ -61,32 +98,44 @@ const getMapImage = () => {
   }
 }
 
-/** Log map action (tool click or draw stop). For follower, includes map_image (image) or filledCells (txt). */
-const logMapAction = async (actionType, actionContent) => {
-  let mapImage = null
-  let metadata = {}
-  if (props.showToolbox) {
-    mapImage = getMapImage()
-    if (mapType.value === 'txt' && filledCells.value.size > 0) {
-      metadata = { filledCells: [...filledCells.value] }
+/** Log map action (tool click or draw stop). Deferred: map snapshot + backend log run after paint (no await on click path). */
+const logMapAction = (actionType, actionContent) => {
+  requestAnimationFrame(() => {
+    let mapImage = null
+    let metadata = {}
+    if (props.showToolbox) {
+      mapImage = getMapImage()
+      if (mapType.value === 'txt' && filledCells.value.size > 0) {
+        metadata = { filledCells: [...filledCells.value] }
+      }
     }
-  }
-  await logActionToBackend({ actionType, actionContent, mapImage, metadata })
+    logActionToBackend({ actionType, actionContent, mapImage, metadata })
+  })
 }
 
-const onToolChange = async (newTool) => {
-  await logMapAction('map_tool_click', newTool)
+const onToolChange = (newTool) => {
   tool.value = newTool
+  logMapAction('map_tool_click', newTool)
 }
 
-const onTxtMouseUp = async () => {
-  if (isDrawing.value && props.showToolbox) await logMapAction('map_draw_stop', 'brush_release')
+const onTxtMouseUp = () => {
+  const wasDrawing = isDrawing.value
   isDrawing.value = false
+  lastCell.value = null
+  if (wasDrawing && props.showToolbox) {
+    pushTxtUndoStateIfChanged()
+    void logMapAction('map_draw_stop', 'brush_release')
+  }
 }
 
-const onTxtMouseLeave = async () => {
-  if (isDrawing.value && props.showToolbox) await logMapAction('map_draw_stop', 'mouse_leave')
+const onTxtMouseLeave = () => {
+  const wasDrawing = isDrawing.value
   isDrawing.value = false
+  lastCell.value = null
+  if (wasDrawing && props.showToolbox) {
+    pushTxtUndoStateIfChanged()
+    void logMapAction('map_draw_stop', 'mouse_leave')
+  }
 }
 
 const mapUrl = computed(() => {
@@ -99,13 +148,16 @@ const txtContent = ref('')
 const txtLoading = ref(false)
 const txtError = ref(null)
 
-const resetDrawing = async () => {
-  await logMapAction('map_tool_click', 'reset')
+const resetDrawing = () => {
   filledCells.value = new Set()
-  if (mapType.value === 'image' && canvasCtx.value && canvasImage.value) {
-    canvasCtx.value.clearRect(0, 0, canvasRef.value?.width || 0, canvasRef.value?.height || 0)
+  txtUndoStack.value = [new Set()]
+  if (mapType.value === 'image' && canvasCtx.value && canvasRef.value) {
+    canvasCtx.value.clearRect(0, 0, canvasRef.value.width || 0, canvasRef.value.height || 0)
+    canvasUndoStack.value = []
+    pushCanvasUndoState()
   }
   scheduleSyncMapProgress()
+  logMapAction('map_tool_click', 'reset')
 }
 
 const getCellKey = (row, col) => `${row},${col}`
@@ -146,6 +198,9 @@ const drawStart = ref(null)
 
 const mounted = ref(true)
 
+const ERASER_RADIUS_MIN = 4
+const ERASER_RADIUS_MAX = 72
+
 const initCanvas = () => {
   if (!mounted.value || !containerRef.value || !canvasRef.value || mapType.value !== 'image') return
   const img = containerRef.value.querySelector('.map-image')
@@ -159,6 +214,8 @@ const initCanvas = () => {
     canvas.style.height = img.offsetHeight + 'px'
     canvasCtx.value = canvas.getContext('2d')
     canvasImage.value = img
+    canvasUndoStack.value = []
+    pushCanvasUndoState()
   }
   if (img.complete) onLoad()
   else img.addEventListener('load', onLoad)
@@ -176,10 +233,56 @@ const getCanvasCoords = (e) => {
   }
 }
 
+/** Circular erase (transparent hole) using current radius in canvas pixels. */
+const eraseCircleAt = (ctx, x, y, r) => {
+  ctx.save()
+  ctx.globalCompositeOperation = 'destination-out'
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+const updateEraserPreview = (e) => {
+  if (tool.value !== 'eraser' || mapType.value !== 'image' || !canvasRef.value) return
+  const canvas = canvasRef.value
+  const scale = canvas.clientWidth / canvas.width
+  const rCss = eraserRadius.value * scale
+  eraserPreview.value = {
+    visible: true,
+    left: e.offsetX - rCss,
+    top: e.offsetY - rCss,
+    size: rCss * 2
+  }
+}
+
+const canvasPointerDown = ref(false)
+
+const finishCanvasStroke = (logReason) => {
+  const wasDrawing = isDrawing.value
+  isDrawing.value = false
+  drawStart.value = null
+  canvasPointerDown.value = false
+  if (!wasDrawing || !props.showToolbox) {
+    if (props.showToolbox && mapType.value === 'image') scheduleSyncMapProgress()
+    return
+  }
+  if (mapType.value === 'image') pushCanvasUndoState()
+  void logMapAction('map_draw_stop', logReason)
+  if (props.showToolbox && mapType.value === 'image') scheduleSyncMapProgress()
+}
+
+const onWindowPointerUp = () => {
+  if (!canvasPointerDown.value) return
+  finishCanvasStroke('brush_release')
+}
+
 const handleCanvasMouseDown = (e) => {
   if (!canDraw.value || !props.showToolbox || mapType.value !== 'image') return
+  canvasPointerDown.value = true
   isDrawing.value = true
   const coords = getCanvasCoords(e)
+  const r = eraserRadius.value
   if (coords && canvasCtx.value) {
     drawStart.value = coords
     if (tool.value === 'brush') {
@@ -188,15 +291,22 @@ const handleCanvasMouseDown = (e) => {
       canvasCtx.value.fillStyle = '#000'
       canvasCtx.value.fill()
     } else if (tool.value === 'eraser') {
-      canvasCtx.value.clearRect(coords.x - 16, coords.y - 16, 32, 32)
+      eraseCircleAt(canvasCtx.value, coords.x, coords.y, r)
     }
   }
 }
 
 const handleCanvasMouseMove = (e) => {
-  if (!isDrawing.value || !canvasCtx.value) return
+  if (!canvasCtx.value) return
+  if (tool.value === 'eraser') updateEraserPreview(e)
+  else if (eraserPreview.value.visible) {
+    eraserPreview.value = { visible: false, left: 0, top: 0, size: 0 }
+  }
+
+  if (!isDrawing.value) return
   const coords = getCanvasCoords(e)
   if (!coords) return
+  const r = eraserRadius.value
   if (tool.value === 'brush' && drawStart.value) {
     canvasCtx.value.beginPath()
     canvasCtx.value.moveTo(drawStart.value.x, drawStart.value.y)
@@ -207,24 +317,37 @@ const handleCanvasMouseMove = (e) => {
     canvasCtx.value.stroke()
     drawStart.value = coords
   } else if (tool.value === 'eraser') {
-    canvasCtx.value.clearRect(coords.x - 16, coords.y - 16, 32, 32)
+    eraseCircleAt(canvasCtx.value, coords.x, coords.y, r)
   }
 }
 
-const handleCanvasMouseUp = async () => {
-  if (isDrawing.value && props.showToolbox) {
-    await logMapAction('map_draw_stop', 'brush_release')
-  }
-  isDrawing.value = false
-  if (props.showToolbox && mapType.value === 'image') scheduleSyncMapProgress()
+const handleCanvasMouseUp = () => {
+  finishCanvasStroke('brush_release')
 }
 
-const handleCanvasMouseLeave = async () => {
-  if (isDrawing.value && props.showToolbox) {
-    await logMapAction('map_draw_stop', 'mouse_leave')
+const handleCanvasMouseLeave = () => {
+  eraserPreview.value = { visible: false, left: 0, top: 0, size: 0 }
+  finishCanvasStroke('mouse_leave')
+}
+
+const undoLast = () => {
+  if (mapType.value === 'image') {
+    if (canvasUndoStack.value.length <= 1) return
+    canvasUndoStack.value.pop()
+    const prev = canvasUndoStack.value[canvasUndoStack.value.length - 1]
+    if (canvasCtx.value && canvasRef.value && prev) {
+      canvasCtx.value.putImageData(prev, 0, 0)
+    }
+  } else if (mapType.value === 'txt') {
+    if (txtUndoStack.value.length <= 1) return
+    txtUndoStack.value.pop()
+    const prev = txtUndoStack.value[txtUndoStack.value.length - 1]
+    filledCells.value = new Set(prev)
+  } else {
+    return
   }
-  isDrawing.value = false
-  if (props.showToolbox && mapType.value === 'image') scheduleSyncMapProgress()
+  scheduleSyncMapProgress()
+  logMapAction('map_tool_click', 'undo')
 }
 
 // Sync map_progress to backend for guider's Info Dashboard (follower only)
@@ -273,6 +396,7 @@ const loadTxtContent = async () => {
     const res = await fetch(url)
     if (!res.ok) throw new Error(`Failed to load map (${res.status})`)
     txtContent.value = await res.text()
+    txtUndoStack.value = [new Set()]
   } catch (e) {
     txtError.value = e?.message || 'Failed to load map'
     txtContent.value = ''
@@ -295,6 +419,10 @@ watch(() => props.map?.id ?? null, (newId, oldId) => {
 
 watch(() => props.showToolbox, () => {
   if (props.showToolbox && mapType.value === 'image') setTimeout(initCanvas, 150)
+})
+
+watch(tool, () => {
+  eraserPreview.value = { visible: false, left: 0, top: 0, size: 0 }
 })
 
 const TXT_CELL_SIZE = 14
@@ -323,12 +451,14 @@ const txtScale = computed(() => {
 })
 
 onMounted(() => {
+  window.addEventListener('pointerup', onWindowPointerUp)
   if (mapType.value === 'txt') loadTxtContent()
   else if (mapType.value === 'image' && props.showToolbox) setTimeout(initCanvas, 150)
 })
 
 onBeforeUnmount(() => {
   mounted.value = false
+  window.removeEventListener('pointerup', onWindowPointerUp)
 })
 </script>
 
@@ -342,10 +472,22 @@ onBeforeUnmount(() => {
           v-if="mapType === 'image' && showToolbox && canDraw"
           ref="canvasRef"
           class="drawing-canvas"
+          :class="{ 'drawing-canvas--eraser': tool === 'eraser' }"
           @mousedown="handleCanvasMouseDown"
           @mousemove="handleCanvasMouseMove"
           @mouseup="handleCanvasMouseUp"
           @mouseleave="handleCanvasMouseLeave"
+        />
+        <div
+          v-if="mapType === 'image' && showToolbox && canDraw && tool === 'eraser' && eraserPreview.visible"
+          class="eraser-cursor-ring"
+          :style="{
+            left: eraserPreview.left + 'px',
+            top: eraserPreview.top + 'px',
+            width: eraserPreview.size + 'px',
+            height: eraserPreview.size + 'px'
+          }"
+          aria-hidden="true"
         />
       </div>
       <!-- TXT: render here for drawing support -->
@@ -377,9 +519,14 @@ onBeforeUnmount(() => {
     </div>
     <MapToolbox
       v-if="showToolbox && canDraw"
+      v-model:eraser-radius="eraserRadius"
+      :eraser-min="ERASER_RADIUS_MIN"
+      :eraser-max="ERASER_RADIUS_MAX"
+      :can-undo="canUndo"
       :tool="tool"
       @update:tool="onToolChange"
       @reset="resetDrawing"
+      @undo="undoLast"
     />
   </div>
 </template>
@@ -417,8 +564,23 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 0;
   left: 0;
+  z-index: 1;
   pointer-events: auto;
   cursor: crosshair;
+}
+
+.drawing-canvas--eraser {
+  cursor: none;
+}
+
+.eraser-cursor-ring {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 2px solid rgba(37, 99, 235, 0.85);
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: rgba(37, 99, 235, 0.08);
 }
 
 .map-txt-drawable {

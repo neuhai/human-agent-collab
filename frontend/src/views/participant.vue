@@ -328,6 +328,8 @@ const communicationMedia = computed(() => {
 // In-session annotation popup state
 const showAnnotationPopup = ref(false)
 const annotationCheckpoint = ref(0)
+/** True after this participant submitted but other human(s) have not yet */
+const annotationWaitingForPartners = ref(false)
 
 // Store cleanup function reference
 let cleanupParticipantsListener = null
@@ -1531,9 +1533,16 @@ const submitAnnotation = async (transcription) => {
     })
     const data = await response.json()
     if (data.success) {
-      showAnnotationPopup.value = false
-      sessionStatus.value = data.resumed ? 'running' : 'paused'
-      sessionStatusMessage.value = data.resumed ? 'Running' : 'Paused'
+      if (data.resumed) {
+        annotationWaitingForPartners.value = false
+        showAnnotationPopup.value = false
+        sessionStatus.value = 'running'
+        sessionStatusMessage.value = 'Running'
+      } else {
+        annotationWaitingForPartners.value = true
+        sessionStatus.value = 'paused'
+        sessionStatusMessage.value = 'Paused'
+      }
     } else {
       alert(data.error || 'Failed to submit annotation')
     }
@@ -1749,6 +1758,7 @@ onMounted(async () => {
           if (data.session_id && data.session_id !== sessionIdForWebSocket) return
           const myId = sessionStorage.getItem('participant_id')
           if (data.human_participant_ids && !data.human_participant_ids.includes(myId)) return
+          annotationWaitingForPartners.value = false
           showAnnotationPopup.value = true
           annotationCheckpoint.value = data.checkpoint_index ?? 0
           sessionStatus.value = 'paused'
@@ -1756,6 +1766,7 @@ onMounted(async () => {
         }
         const annotationResumeHandler = (data) => {
           if (data.session_id && data.session_id !== sessionIdForWebSocket) return
+          annotationWaitingForPartners.value = false
           showAnnotationPopup.value = false
           sessionStatus.value = 'running'
           sessionStatusMessage.value = 'Running'
@@ -1970,6 +1981,7 @@ onUnmounted(() => {
     v-if="showAnnotationPopup"
     :show="showAnnotationPopup"
     :checkpoint-index="annotationCheckpoint"
+    :waiting-for-partners="annotationWaitingForPartners"
     @submit="submitAnnotation"
   />
 

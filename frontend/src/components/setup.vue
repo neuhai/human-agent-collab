@@ -1,12 +1,16 @@
 <script setup>
 import { ref, computed, watch, inject, onMounted, onUnmounted, nextTick } from 'vue'
 import BaseParticipantStatusComponent from './BaseParticipantStatusComponent.vue'
+import MturkPanel from './MturkPanel.vue'
 import { onParticipantsUpdate, offParticipantsUpdate } from '../services/websocket.js'
 import mapPreviewImg from '../assets/map_preview.png'
 
 // Inject experiments and update function from researcher.vue
 const experiments = inject('experiments')
+const participantTemplates = inject('participantTemplates', ref({}))
 const updateSelectedExperimentType = inject('updateSelectedExperimentType')
+const upsertExperimentConfig = inject('upsertExperimentConfig', () => {})
+const upsertParticipantTemplate = inject('upsertParticipantTemplate', () => {})
 const selectedExperimentType = inject('selectedExperimentType') // Inject from researcher.vue to maintain state
 const isSessionCreated = inject('isSessionCreated')
 const currentSessionId = inject('currentSessionId')
@@ -17,7 +21,8 @@ const setupWorkflowSteps = ref([
   { id: 'experimentSelection', label: 'Experiment Selection' },
   { id: 'parameters', label: 'Parameters' },
   { id: 'interactionVariables', label: 'Interaction Controls' },
-  { id: 'participantRegistration', label: 'Participant Registration' }
+  { id: 'participantRegistration', label: 'Participant Registration' },
+  { id: 'mturkPanel', label: 'MTurk Panel (Optional)' }
 ])
 
 const activeSetupTab = ref('initialSelection')
@@ -26,7 +31,8 @@ const setupTabs = ref({
   experimentSelection: true,
   parameters: true,
   interactionVariables: true,
-  participantRegistration: true
+  participantRegistration: true,
+  mturkPanel: true
 })
 
 const MBTI_PROFILES = {
@@ -103,6 +109,7 @@ const allUniqueTags = ref(['Coordination', 'Trade', 'Social Dilemma', 'Collabora
 const fileInputRef = ref(null)
 const isUploadingConfig = ref(false)
 const configValidationStatus = ref(null)
+const validatedUploadedConfig = ref(null)
 
 // Parameters
 const experimentConfig = ref({})
@@ -137,7 +144,7 @@ const annotationEnabled = ref(false)
 
 // Participant Registration
 // Participant configuration based on experiment type (excluding mbti and experiment_params)
-const PARTICIPANT_CONFIG = {
+const DEFAULT_PARTICIPANT_CONFIG = {
   shapefactory: {
     id: { type: 'string', default: '' },
     name: { type: 'string', default: '' },
@@ -177,13 +184,16 @@ const PARTICIPANT_CONFIG = {
 const getParticipantConfig = computed(() => {
   if (!selectedExperimentType.value) return null
   
-  const baseConfig = PARTICIPANT_CONFIG[selectedExperimentType.value]
+  const templateFromBackend = participantTemplates.value?.[selectedExperimentType.value]?.[0]
+  const baseConfig = templateFromBackend || DEFAULT_PARTICIPANT_CONFIG[selectedExperimentType.value]
   if (!baseConfig) return null
   
   // For shapefactory, dynamically update specialty options based on # Shapes Types
   if (selectedExperimentType.value === 'shapefactory' && baseConfig.specialty) {
     const shapesTypes = experimentConfig.value.shapesTypes || 3
-    const allShapes = ['circle', 'square', 'triangle', 'rectangle']
+    const allShapes = Array.isArray(baseConfig.specialty.options) && baseConfig.specialty.options.length > 0
+      ? baseConfig.specialty.options
+      : ['circle', 'square', 'triangle', 'rectangle']
     const availableShapes = allShapes.slice(0, shapesTypes)
     
     // Add 'auto-assign' option to the beginning of the options array
@@ -1384,16 +1394,74 @@ const triggerFileUpload = () => {
   fileInputRef.value?.click()
 }
 
-const handleFileUpload = (event) => {
+const handleFileUpload = async (event) => {
   const file = event.target.files?.[0]
   if (!file) return
   
   isUploadingConfig.value = true
-  // TODO: Implement file validation and parsing
-  setTimeout(() => {
-    configValidationStatus.value = { type: 'success', message: 'Config file loaded successfully' }
+  configValidationStatus.value = null
+  validatedUploadedConfig.value = null
+
+  try {
+    const content = await file.text()
+    const response = await fetch('/api/experiments/validate-upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        fileName: file.name,
+        content,
+      }),
+    })
+
+    const result = await response.json()
+    if (result.valid) {
+      validatedUploadedConfig.value = result.normalized_config || null
+      const uploadedExperiment = validatedUploadedConfig.value?.experiment
+      const expId = uploadedExperiment?.id
+      const uploadedParticipant = expId ? validatedUploadedConfig.value?.participant?.[expId] : null
+
+      if (uploadedExperiment && expId) {
+        upsertExperimentConfig(uploadedExperiment)
+        if (Array.isArray(uploadedParticipant)) {
+          upsertParticipantTemplate(expId, uploadedParticipant)
+        }
+        selectedExperimentType.value = expId
+        updateSelectedExperimentType(expId)
+
+        // Re-initialize local UI state using uploaded schema source
+        initializeExperimentConfig()
+        initializeInteractionConfig()
+        initializeParticipantForm()
+      }
+
+      const warnings = Array.isArray(result.warnings) ? result.warnings : []
+      const warningText = warnings.length > 0 ? ` (warnings: ${warnings.slice(0, 2).join('; ')})` : ''
+      configValidationStatus.value = {
+        type: 'success',
+        message: `Config validation passed and applied to current UI.${warningText}`,
+      }
+    } else {
+      const errors = Array.isArray(result.errors) ? result.errors : []
+      const firstErrors = errors.slice(0, 3).map((e) => `${e.path}: ${e.message}`)
+      const overflow = errors.length > 3 ? ` ... +${errors.length - 3} more` : ''
+      configValidationStatus.value = {
+        type: 'error',
+        message: `Validation failed: ${firstErrors.join(' | ')}${overflow}`,
+      }
+    }
+  } catch (err) {
+    configValidationStatus.value = {
+      type: 'error',
+      message: `Upload/validation error: ${err.message}`,
+    }
+  } finally {
     isUploadingConfig.value = false
-  }, 1000)
+    if (event?.target) {
+      event.target.value = ''
+    }
+  }
 }
 
 // Parameters
@@ -2867,7 +2935,6 @@ const loadSessionFromName = async () => {
                     </button>
                     <input ref="fileInputRef" type="file" accept=".json,.yaml,.yml" @change="handleFileUpload" style="display: none;" />
                     <div v-if="configValidationStatus" class="validation-status" :class="configValidationStatus.type">
-                      <span class="validation-icon">{{ configValidationStatus.type === 'error' ? '❌' : '✅' }}</span>
                       <span class="validation-message">{{ configValidationStatus.message }}</span>
                     </div>
                   </div>
@@ -3647,6 +3714,22 @@ const loadSessionFromName = async () => {
                   <small class="form-help">Triggers Quick Checking pop-ups at 20-25%, 45-50%, 70-75% of session when participants perform key actions</small>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 6: MTurk Panel -->
+        <div v-if="setupTabs.mturkPanel" class="setup-tab-panel" :class="{ active: activeSetupTab === 'mturkPanel' }" data-tab-id="mturkPanel">
+          <div class="workflow-step">
+            <div class="step-content">
+              <div class="step-title-row">
+                <div class="step-title">MTurk Panel (Optional)</div>
+              </div>
+              <MturkPanel
+                :session-name="currentSessionName"
+                :session-id="currentSessionId"
+                :is-session-created="isSessionCreated"
+              />
             </div>
           </div>
         </div>

@@ -1,19 +1,25 @@
 """
 Annotation Service: Manages in-session annotation checkpoints.
 
-When annotation is enabled, triggers pop-ups at 20-25%, 45-50%, 70-75% of session duration
-when a participant performs a key action (trade completion, draw stop, message send).
+Triggers can happen in two ways:
+1) Action-triggered: when a participant performs a key action in a checkpoint window.
+2) Forced-triggered: if no action-trigger happened, force popup in the late part of the window.
 """
 
 from typing import Optional, Tuple
 
+from routes.session import commit_session
+
 # Checkpoint ranges: (min_pct, max_pct) for each of 3 checkpoints
 # Widened from 5% to 15% windows so users don't miss triggers (e.g. 2-min session: 18s window vs 6s)
 ANNOTATION_CHECKPOINT_RANGES = [
-    (15, 30),   # Checkpoint 0: ~20% (15-30%)
-    (40, 55),   # Checkpoint 1: ~45% (40-55%)
-    (65, 80),   # Checkpoint 2: ~70% (65-80%)
+    (20, 25),   # Checkpoint 0: ~20% (15-30%)
+    (45, 50),   # Checkpoint 1: ~45% (40-55%)
+    (70, 75),   # Checkpoint 2: ~70% (65-80%)
 ]
+# Force trigger in the last part of each checkpoint window.
+# Example for 15-30: threshold = 30 - (30-15)*0.25 = 26.25%
+FORCED_TRIGGER_WINDOW_RATIO = 0.05
 
 
 def is_annotation_enabled(session: dict) -> bool:
@@ -168,7 +174,7 @@ def trigger_annotation(
     if checkpoint_index not in triggered:
         triggered.append(checkpoint_index)
     session['annotation_triggered_checkpoints'] = triggered
-    sessions_store[session_key] = session
+    commit_session(session_key, session)
 
     # Broadcast annotation popup to all participants
     socketio = get_socketio()
@@ -188,6 +194,49 @@ def trigger_annotation(
     )
 
 
+def check_and_force_trigger_annotation(
+    session_key: str,
+    session: dict,
+    sessions_store: dict,
+) -> Tuple[bool, Optional[int]]:
+    """
+    Force-trigger annotation in the late part of a checkpoint window when:
+    - annotation is enabled,
+    - session is running,
+    - no annotation is active,
+    - checkpoint has not been triggered yet.
+
+    Returns (triggered, checkpoint_index).
+    """
+    if not is_annotation_enabled(session):
+        return False, None
+    if session.get('status') != 'running':
+        return False, None
+    if session.get('annotation_active'):
+        return False, None
+
+    progress = get_session_progress_pct(session)
+    checkpoint = get_current_checkpoint(session)
+    if progress is None or checkpoint is None:
+        return False, None
+
+    triggered = session.get('annotation_triggered_checkpoints', [])
+    if checkpoint in triggered:
+        return False, None
+
+    lo, hi = ANNOTATION_CHECKPOINT_RANGES[checkpoint]
+    force_start = hi - ((hi - lo) * FORCED_TRIGGER_WINDOW_RATIO)
+    if progress < force_start:
+        return False, None
+
+    print(
+        f'[Annotation] FORCE TRIGGER: checkpoint {checkpoint}, '
+        f'progress={progress:.2f}%, window={lo}-{hi}, force_start={force_start:.2f}%'
+    )
+    trigger_annotation(session_key, session, checkpoint, sessions_store)
+    return True, checkpoint
+
+
 def submit_annotation(
     session_key: str,
     session: dict,
@@ -205,6 +254,7 @@ def submit_annotation(
     if not session.get('annotation_active'):
         return False
 
+    checkpoint = session.get('annotation_checkpoint', 0)
     submitted = set(session.get('annotation_submitted', []))
     submitted.add(participant_id)
     session['annotation_submitted'] = list(submitted)
@@ -214,11 +264,21 @@ def submit_annotation(
     if participant_id not in annotations:
         annotations[participant_id] = []
     annotations[participant_id].append({
-        'checkpoint': session.get('annotation_checkpoint', 0),
+        'checkpoint': checkpoint,
         'transcription': transcription,
     })
     session['annotation_data'] = annotations
-    sessions_store[session_key] = session
+    commit_session(session_key, session)
+
+    try:
+        actual_session_id = session.get('session_id') or session_key
+        from services.db import persist_in_session_annotation
+
+        persist_in_session_annotation(
+            actual_session_id, participant_id, checkpoint, transcription
+        )
+    except Exception as db_err:
+        print(f'[Annotation] in_session DB persist: {db_err}')
 
     human_ids = set(get_human_participant_ids(session))
     if submitted >= human_ids:
@@ -228,7 +288,7 @@ def submit_annotation(
         session['annotation_checkpoint'] = None
         session['annotation_submitted'] = []
         session['status'] = 'running'
-        sessions_store[session_key] = session
+        commit_session(session_key, session)
 
         resume_timer(session_id)
 

@@ -15,6 +15,8 @@ import shutil
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 
+from services.annotation_service import is_annotation_enabled
+
 
 # Base directory for logs (relative to backend root)
 LOGS_BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
@@ -64,6 +66,45 @@ def _save_base64_to_file(session_id: str, action_id: str, field: str, data: str)
             f.write(file_bytes)
         return f'files/{filename}'
     except Exception:
+        return None
+
+
+def _upload_annotation_screenshot_s3(session_id: str, action_id: str, data: str) -> Optional[str]:
+    """data: data:image/...;base64,... -> s3 uri or None."""
+    try:
+        from services import s3_storage
+        if not s3_storage.is_s3_configured():
+            return None
+        if not data or not isinstance(data, str):
+            return None
+        match = re.match(r'^data:([^;]+);base64,(.+)$', data.strip())
+        if not match:
+            return None
+        mime, b64 = match.group(1), match.group(2)
+        ext_map = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp'}
+        ext = ext_map.get(mime.lower(), 'png')
+        ct_map = {'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif', 'webp': 'image/webp'}
+        content_type = ct_map.get(ext, 'image/png')
+        try:
+            raw = base64.b64decode(b64)
+        except Exception:
+            return None
+        key = s3_storage.build_annotation_key(session_id, action_id, f'screenshot.{ext}')
+        return s3_storage.upload_bytes(key, raw, content_type)
+    except Exception as e:
+        print(f'[ActionLogger] Non-fatal S3 screenshot upload error: {e}')
+        return None
+
+
+def _upload_annotation_html_s3(session_id: str, action_id: str, content: str) -> Optional[str]:
+    try:
+        from services import s3_storage
+        if not s3_storage.is_s3_configured():
+            return None
+        key = s3_storage.build_annotation_key(session_id, action_id, 'html_snapshot.html')
+        return s3_storage.upload_bytes(key, content.encode('utf-8'), 'text/html; charset=utf-8')
+    except Exception as e:
+        print(f'[ActionLogger] Non-fatal S3 HTML upload error: {e}')
         return None
 
 
@@ -201,18 +242,43 @@ def log_action(
         }
 
         if is_human:
+            ann_mode = bool(session and is_annotation_enabled(session))
+            use_s3_assets = ann_mode
             if screenshot is not None:
                 if isinstance(screenshot, str) and screenshot.startswith('data:'):
-                    ref = _save_base64_to_file(session_id, action_id, 'screenshot', screenshot)
-                    entry['screenshot'] = ref if ref else screenshot
+                    if use_s3_assets:
+                        s3_uri = _upload_annotation_screenshot_s3(session_id, action_id, screenshot)
+                        if s3_uri:
+                            entry['screenshot'] = s3_uri
+                        else:
+                            ref = _save_base64_to_file(session_id, action_id, 'screenshot', screenshot)
+                            entry['screenshot'] = ref if ref else screenshot
+                    else:
+                        ref = _save_base64_to_file(session_id, action_id, 'screenshot', screenshot)
+                        entry['screenshot'] = ref if ref else screenshot
                 else:
                     entry['screenshot'] = screenshot
             if html_snapshot is not None:
-                if len(html_snapshot) > HTML_SNAPSHOT_INLINE_MAX:
-                    ref = _save_text_to_file(session_id, action_id, 'html_snapshot', html_snapshot)
-                    entry['html_snapshot'] = ref
+                if use_s3_assets:
+                    if len(html_snapshot) > HTML_SNAPSHOT_INLINE_MAX:
+                        s3_uri = _upload_annotation_html_s3(session_id, action_id, html_snapshot)
+                        if s3_uri:
+                            entry['html_snapshot'] = s3_uri
+                        else:
+                            ref = _save_text_to_file(session_id, action_id, 'html_snapshot', html_snapshot)
+                            entry['html_snapshot'] = ref
+                    else:
+                        s3_uri = _upload_annotation_html_s3(session_id, action_id, html_snapshot)
+                        if s3_uri:
+                            entry['html_snapshot'] = s3_uri
+                        else:
+                            entry['html_snapshot'] = html_snapshot
                 else:
-                    entry['html_snapshot'] = html_snapshot
+                    if len(html_snapshot) > HTML_SNAPSHOT_INLINE_MAX:
+                        ref = _save_text_to_file(session_id, action_id, 'html_snapshot', html_snapshot)
+                        entry['html_snapshot'] = ref
+                    else:
+                        entry['html_snapshot'] = html_snapshot
         else:
             # Agent: use session_status
             if session_status is None and session and participant:
@@ -234,6 +300,13 @@ def log_action(
         log_path = os.path.join(session_dir, f'{participant_id}.jsonl')
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+        try:
+            from services.db import is_db_configured, persist_action_log
+            if is_db_configured():
+                persist_action_log(entry)
+        except Exception as db_err:
+            print(f'[ActionLogger] DB persist skipped: {db_err}')
 
         return action_id
     except Exception as e:

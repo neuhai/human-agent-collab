@@ -1,0 +1,533 @@
+{
+  "experiment": {
+    "id": "shapefactory",
+    "name": "Shape Factory",
+    "tags": [
+      "Coordination",
+      "Trade"
+    ],
+    "description": "**Procedures**: Each participant can produce shapes, buy&sell shapes, and chat with others. Each one is assigned a specialty shape that can be cheaply produced.\n\n**Constraints**: shape production limit; time limit.\n\n**Goal**: Maximize individual profit.",
+    "params": [
+      {
+        "General Settings": [
+          {
+            "label": "Session Duration (min)",
+            "type": "number",
+            "default": 30,
+            "path": "Session.Params.duration"
+          }
+        ],
+        "Money": [
+          {
+            "label": "Participant Initial Money ($)",
+            "type": "number",
+            "default": 200,
+            "path": "Session.Params.startingMoney"
+          },
+          {
+            "label": "Regular Shape Production Cost ($)",
+            "type": "number",
+            "default": 40,
+            "path": "Session.Params.regularCost"
+          },
+          {
+            "label": "Specialty Production Cost ($)",
+            "type": "number",
+            "default": 15,
+            "path": "Session.Params.specialtyCost"
+          },
+          {
+            "label": "Min. Trade Price ($)",
+            "type": "number",
+            "default": 15,
+            "path": "Session.Params.minTradePrice"
+          },
+          {
+            "label": "Max. Trade Price ($)",
+            "type": "number",
+            "default": 100,
+            "path": "Session.Params.maxTradePrice"
+          },
+          {
+            "label": "Order Incentive ($/shape fulfilled)",
+            "type": "number",
+            "default": 60,
+            "path": "Session.Params.incentiveMoney"
+          }
+        ],
+        "Shape Production & Order": [
+          {
+            "label": "Production Time (sec)",
+            "type": "number",
+            "default": 30,
+            "path": "Session.Params.productionTime",
+            "description": "Time required to produce one shape."
+          },
+          {
+            "label": "# Max. Production",
+            "type": "number",
+            "default": 3,
+            "path": "Session.Params.maxProductionNum",
+            "description": "Maximum total number of shapes a participant can produce (specialty and non-specialty combined)."
+          },
+          {
+            "label": "# Shapes Order",
+            "type": "number",
+            "default": 4,
+            "path": "Session.Params.shapesOrder",
+            "description": "Number of shapes required to complete one order."
+          },
+          {
+            "label": "# Shapes Types",
+            "type": "number",
+            "default": 3,
+            "path": "Session.Params.shapesTypes",
+            "description": "Number of distinct shape categories in the game."
+          }
+        ]
+      }
+    ],
+    "interaction": {
+      "Information Flow": [
+        {
+          "label": "Communication Level",
+          "type": "list",
+          "default": "Private Messaging",
+          "options": [
+            {
+              "Private Messaging": "Participants can send private one-to-one messages"
+            },
+            {
+              "Group Chat": "All participants can see and send messages in a group"
+            },
+            {
+              "No Chat": "Messaging disabled; no communication possible."
+            }
+          ],
+          "path": "Session.Interaction.communicationLevel",
+          "description": "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."
+        },
+        {
+          "label": "Communication Media",
+          "type": "multi_checkbox",
+          "default": [
+            "text"
+          ],
+          "options": [
+            {
+              "label": "Text Message",
+              "value": "text",
+              "description": "Participants type messages"
+            },
+            {
+              "label": "Audio",
+              "value": "audio",
+              "description": "Voice input with Whisper transcription"
+            },
+            {
+              "label": "Meeting Room",
+              "value": "meeting_room",
+              "description": "Real-time video/audio like Zoom"
+            }
+          ],
+          "path": "Session.Interaction.communicationMedia",
+          "description": "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."
+        },
+        {
+          "label": "Awareness Dashboard",
+          "type": "tiered_checkbox",
+          "default": {
+            "enabled": true,
+            "items": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "description": "Enable the Awareness Dashboard for participants. When enabled, select the information items to display to participants (e.g., others' money, order progress).",
+          "options": [
+            {
+              "label": "Name",
+              "path": "Participant.name",
+              "control": "text"
+            },
+            {
+              "label": "Specialty Shape",
+              "path": "Participant.specialty",
+              "control": "shape",
+              "value": "circle"
+            },
+            {
+              "label": "Money",
+              "path": "Participant.money",
+              "control": "text"
+            },
+            {
+              "label": "Production",
+              "path": "Participant.production_number",
+              "control": "text"
+            },
+            {
+              "label": "Orders",
+              "path": "Participant.order_progress",
+              "control": "progress",
+              "value": 75
+            }
+          ],
+          "path": "Session.Interaction.awarenessDashboard"
+        }
+      ],
+      "Action Structures": [
+        {
+          "label": "Negotiations",
+          "type": "boolean",
+          "default": "allow",
+          "options": [
+            "Counter",
+            "No Counter"
+          ],
+          "path": "Session.Interaction.negotiations",
+          "description": "Counter: Participants can make counter offers. No Counter: Offers can only be accepted or rejected."
+        },
+        {
+          "label": "Simultaneous Actions",
+          "type": "boolean",
+          "default": "allow",
+          "options": [
+            "Allowed",
+            "Not Allowed"
+          ],
+          "path": "Session.Interaction.simultaneousActions",
+          "description": "Allow: Multiple offers can be made at once. Not Allow: Each offer must be resolved before a new one begins."
+        }
+      ],
+      "Agent Behaviors": [
+        {
+          "label": "Agent Perception Time Window (sec)",
+          "type": "number",
+          "default": 15,
+          "path": "Session.Interaction.agentPerceptionTimeWindow",
+          "description": "Frequency (in seconds) at which agents update their view of the game state."
+        },
+        {
+          "label": "Rationales",
+          "type": "boolean",
+          "default": "step_wise",
+          "options": [
+            "Step-wise",
+            "None"
+          ],
+          "path": "Session.Interaction.rationales",
+          "description": "Step-wise: Agents explain each decision with reasoning. None: Agents act without providing reasoning."
+        }
+      ]
+    },
+    "participant_settings": {
+      "auto_start": false
+    },
+    "interface": {
+      "My Status": [
+        {
+          "id": "my_status",
+          "label": "My Status",
+          "visible_if": "true",
+          "bindings": [
+            {
+              "label": "My Wealth",
+              "path": "Participant.wealth"
+            },
+            {
+              "label": "My Inventory",
+              "path": "Participant.inventory"
+            }
+          ]
+        }
+      ],
+      "My Actions": [
+        {
+          "id": "my_actions",
+          "label": "My Actions",
+          "visible_if": "true",
+          "bindings": [
+            {
+              "label": "My Specialty",
+              "path": "Participant.specialty",
+              "control": "shape"
+            },
+            {
+              "label": "Select a shape to produce",
+              "control": "shape_production",
+              "path": "Participant.shapes",
+              "options": "Participant.shapes"
+            },
+            {
+              "label": "In Production",
+              "path": "Participant.in_production"
+            }
+          ]
+        }
+      ],
+      "My Tasks": [
+        {
+          "id": "my_tasks",
+          "label": "My Tasks",
+          "visible_if": "true",
+          "bindings": [
+            {
+              "label": "",
+              "path": "Participant.tasks",
+              "control": "checkbox",
+              "on_check": "submit_shape"
+            }
+          ]
+        }
+      ],
+      "Social Panel": [
+        {
+          "id": "social_panel",
+          "label": "Social Panel",
+          "visible_if": "true",
+          "bindings": [],
+          "tabs": [
+            "trade",
+            "messages"
+          ],
+          "trade_panel": {
+            "visible_if": "always",
+            "bindings": [
+              {
+                "label": "I want to {trade_action} one {shape_type} from/to {participant_name} at ${trade_price}",
+                "control": "trade_form",
+                "on_submit": "submit_trade",
+                "fields": {
+                  "trade_action": {
+                    "control": "segmented",
+                    "options": [
+                      "buy",
+                      "sell"
+                    ],
+                    "default": "buy",
+                    "path": "Participant.trade_action"
+                  },
+                  "shape_type": {
+                    "control": "shape_production",
+                    "options": "Participant.shapes",
+                    "path": "Participant.trade_shape"
+                  },
+                  "participant_name": {
+                    "control": "text",
+                    "path": "Participant.selected_trade_participant",
+                    "readonly": true
+                  },
+                  "trade_price": {
+                    "control": "text",
+                    "path": "Participant.trade_price",
+                    "default": 20
+                  }
+                }
+              },
+              {
+                "label": "Pending Trade Offers",
+                "control": "trade_offers_list",
+                "path": "Session.pending_trade_offers"
+              },
+              {
+                "label": "Trade History",
+                "control": "trade_history_list",
+                "path": "Session.trade_history"
+              }
+            ]
+          }
+        }
+      ],
+      "Info Dashboard": [
+        {
+          "id": "info_dashboard",
+          "label": "Info Dashboard",
+          "visible_if": "Session.Interaction.awarenessDashboard.enabled",
+          "bindings": [
+            {
+              "label": "Name",
+              "path": "Participant.name",
+              "control": "text",
+              "visible_if": "Session.Interaction.awarenessDashboard.items.contains('Participant.name')"
+            },
+            {
+              "label": "Specialty Shape",
+              "path": "Participant.specialty",
+              "control": "shape",
+              "visible_if": "Session.Interaction.awarenessDashboard.items.contains('Participant.specialty')"
+            },
+            {
+              "label": "Money",
+              "path": "Participant.money",
+              "control": "text",
+              "visible_if": "Session.Interaction.awarenessDashboard.items.contains('Participant.money')"
+            },
+            {
+              "label": "Production",
+              "path": "Participant.production_number",
+              "control": "text",
+              "visible_if": "Session.Interaction.awarenessDashboard.items.contains('Participant.production_number')"
+            },
+            {
+              "label": "Orders",
+              "path": "Participant.order_progress",
+              "control": "progress",
+              "visible_if": "Session.Interaction.awarenessDashboard.items.contains('Participant.order_progress')"
+            }
+          ]
+        }
+      ]
+    },
+    "annotation": {
+      "enabled": false,
+      "checkpoints": [
+        20,
+        45,
+        70
+      ]
+    }
+  },
+  "participant": {
+    "shapefactory": [
+      {
+        "id": {
+          "type": "uuid",
+          "default": ""
+        },
+        "name": {
+          "type": "string",
+          "default": ""
+        },
+        "type": {
+          "type": "string",
+          "options": [
+            "human",
+            "ai"
+          ],
+          "default": ""
+        },
+        "specialty": {
+          "type": "string",
+          "options": [
+            "circle",
+            "square",
+            "triangle",
+            "rectangle",
+            "diamond",
+            "pentagon",
+            "hexagon",
+            "star"
+          ],
+          "control": "shape",
+          "default": ""
+        },
+        "mbti": {
+          "type": "string",
+          "options": [
+            "INTJ",
+            "ENTJ",
+            "INFJ",
+            "ENFJ",
+            "INFP",
+            "ENFP",
+            "INTP",
+            "ENTP",
+            "ISTP",
+            "ESTP",
+            "ISFP",
+            "ESFP",
+            "ISTJ",
+            "ESTJ",
+            "ISFJ",
+            "ESFJ",
+            "unknown"
+          ],
+          "default": ""
+        },
+        "experiment_params": {
+          "money": {
+            "type": "number",
+            "default": 0,
+            "init_path": "Session.Params.startingMoney"
+          },
+          "production_number": {
+            "type": "number",
+            "default": 0,
+            "init_path": null
+          },
+          "order_progress": {
+            "type": "number",
+            "default": 0,
+            "init_path": null
+          },
+          "inventory": {
+            "type": "list",
+            "options": [
+              "circle",
+              "square",
+              "triangle",
+              "rectangle",
+              "diamond",
+              "pentagon",
+              "hexagon",
+              "star"
+            ],
+            "default": [],
+            "init_path": null
+          },
+          "shapes": {
+            "type": "list",
+            "options": [
+              "circle",
+              "square",
+              "triangle",
+              "rectangle",
+              "diamond",
+              "pentagon",
+              "hexagon",
+              "star"
+            ],
+            "options_limit_path": "Session.Params.shapesTypes",
+            "init_path": null
+          },
+          "in_production": {
+            "type": "list",
+            "options": [
+              "circle",
+              "square",
+              "triangle",
+              "rectangle",
+              "diamond",
+              "pentagon",
+              "hexagon",
+              "star"
+            ],
+            "options_limit_path": "Session.Params.shapesTypes",
+            "default": [],
+            "init_path": null
+          },
+          "tasks": {
+            "type": "list",
+            "options": [
+              "circle",
+              "square",
+              "triangle",
+              "rectangle",
+              "diamond",
+              "pentagon",
+              "hexagon",
+              "star"
+            ],
+            "options_limit_path": "Session.Params.shapesTypes",
+            "default": [],
+            "init_path": "Functions.assign_tasks"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -232,7 +232,7 @@ class AgentContextProtocol:
                 p['messages'].append(message)
         
         # Update session storage
-        self.sessions[session_key] = session
+        session_module.commit_session(session_key, session)
         
         # Broadcast message via WebSocket
         socketio = get_socketio()
@@ -429,7 +429,7 @@ def _execute_propose_trade_offer_shapefactory(
     }
     
     session['pending_offers'].append(offer)
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Broadcast update
     broadcast_participant_update(
@@ -522,7 +522,7 @@ def _execute_cancel_trade_offer_shapefactory(
     pending_offers.pop(offer_index)
     offer['status'] = 'cancelled'
     session['pending_offers'] = pending_offers
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Broadcast update
     participants = session.get('participants', [])
@@ -780,7 +780,7 @@ def _execute_trade_response_shapefactory(
     # Update session
     session['pending_offers'] = pending_offers
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Broadcast update
     broadcast_participant_update(
@@ -851,7 +851,7 @@ def _execute_produce_shape_shapefactory(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Recompute interface
     from routes.participant import update_participant_experiment_params
@@ -971,7 +971,7 @@ def _execute_fulfill_order_shapefactory(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Recompute interface
     from routes.participant import update_participant_experiment_params
@@ -1090,7 +1090,7 @@ def _execute_make_investment_daytrader(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Recompute interface
     from routes.participant import update_participant_experiment_params
@@ -1270,7 +1270,7 @@ def _execute_get_essay_content_essayranking(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     return {
         'success': True,
@@ -1466,7 +1466,7 @@ def _execute_submit_ranking_essayranking(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Recompute interface
     from routes.participant import update_participant_experiment_params
@@ -1599,7 +1599,7 @@ def _execute_submit_initial_vote_hiddenprofile(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Recompute interface
     from routes.participant import update_participant_experiment_params
@@ -1693,7 +1693,7 @@ def _execute_submit_final_vote_hiddenprofile(
             break
     
     session['participants'] = participants
-    self.sessions[session_key] = session
+    session_module.commit_session(session_key, session)
     
     # Recompute interface
     from routes.participant import update_participant_experiment_params
