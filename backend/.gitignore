@@ -1,6 +1,8 @@
 # Action logs (session-specific)
 logs/
 
+uploads/
+
 # Python
 __pycache__/
 *.py[cod]

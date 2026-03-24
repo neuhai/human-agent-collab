@@ -123,26 +123,28 @@ const handleLogin = async () => {
 
 <style scoped>
 .login-container {
-  min-height: 100vh;
+  box-sizing: border-box;
+  /* #app has padding: 1vh top+bottom (see style.css); 100vh + that caused page scroll */
+  min-height: calc(100vh - 2vh);
   display: flex;
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 20px;
+  padding: 16px;
 }
 
 .login-card {
   background: white;
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-  padding: 40px;
+  padding: 28px;
   max-width: 500px;
   width: 100%;
 }
 
 .header {
   text-align: center;
-  margin-bottom: 30px;
+  margin-bottom: 20px;
 }
 
 .header h1 {
@@ -157,11 +159,11 @@ const handleLogin = async () => {
 }
 
 .login-form {
-  margin-bottom: 30px;
+  margin-bottom: 20px;
 }
 
 .input-group {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .input-group label {
@@ -224,13 +226,13 @@ const handleLogin = async () => {
 
 .info-section {
   border-top: 1px solid #e1e5e9;
-  padding-top: 25px;
-  margin-bottom: 20px;
+  padding-top: 16px;
+  margin-bottom: 0;
 }
 
 .info-section h3 {
   color: #333;
-  margin-bottom: 15px;
+  margin-bottom: 10px;
   font-size: 18px;
 }
 
@@ -241,9 +243,13 @@ const handleLogin = async () => {
 }
 
 .info-section li {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   padding-left: 20px;
   position: relative;
+}
+
+.info-section li:last-child {
+  margin-bottom: 0;
 }
 
 .info-section li:before {

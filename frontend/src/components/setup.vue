@@ -180,13 +180,27 @@ const DEFAULT_PARTICIPANT_CONFIG = {
   }
 }
 
+// Backend participant templates include schema for runtime (experiment_params) and agent MBTI.
+// Those must not appear as Individual Participant Registration fields; MBTI is embedded in Agent Persona when type is AI.
+const PARTICIPANT_REGISTRATION_OMIT_KEYS = ['experiment_params', 'mbti']
+
+function omitParticipantRegistrationSchemaKeys(config) {
+  const out = { ...config }
+  for (const key of PARTICIPANT_REGISTRATION_OMIT_KEYS) {
+    delete out[key]
+  }
+  return out
+}
+
 // Get participant config for current experiment type
 const getParticipantConfig = computed(() => {
   if (!selectedExperimentType.value) return null
   
   const templateFromBackend = participantTemplates.value?.[selectedExperimentType.value]?.[0]
-  const baseConfig = templateFromBackend || DEFAULT_PARTICIPANT_CONFIG[selectedExperimentType.value]
-  if (!baseConfig) return null
+  const rawConfig = templateFromBackend || DEFAULT_PARTICIPANT_CONFIG[selectedExperimentType.value]
+  if (!rawConfig) return null
+
+  const baseConfig = omitParticipantRegistrationSchemaKeys(rawConfig)
   
   // For shapefactory, dynamically update specialty options based on # Shapes Types
   if (selectedExperimentType.value === 'shapefactory' && baseConfig.specialty) {
