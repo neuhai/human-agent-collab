@@ -377,6 +377,19 @@ const formatAudioDuration = (seconds) => {
     return `${seconds}"`
 }
 
+const normalizeTimestamp = (ts) => {
+    if (ts == null) return 0
+    if (typeof ts === 'number') {
+        // seconds vs ms (rough cutoff: 2000-01-01 in ms)
+        return ts < 946684800000 ? ts * 1000 : ts
+    }
+    if (typeof ts === 'string') {
+        const parsed = new Date(ts).getTime()
+        return Number.isFinite(parsed) ? parsed : 0
+    }
+    return 0
+}
+
 const playAudio = (url) => {
     if (!url) return
     const fullUrl = url.startsWith('http') ? url : (window.location.origin + url)
@@ -396,7 +409,11 @@ const messagesForSelected = computed(() => {
         for (const msgs of Object.values(conv)) {
             if (Array.isArray(msgs)) all.push(...msgs)
         }
-        return all.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+        return [...all].sort((a, b) => {
+            const diff = normalizeTimestamp(a?.timestamp) - normalizeTimestamp(b?.timestamp)
+            if (diff !== 0) return diff
+            return String(a?.id || '').localeCompare(String(b?.id || ''))
+        })
     }
 
     // Private chat: show only messages between me and selected participant
@@ -414,7 +431,11 @@ const messagesForSelected = computed(() => {
         }
     }
 
-    return all.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+    return [...all].sort((a, b) => {
+        const diff = normalizeTimestamp(a?.timestamp) - normalizeTimestamp(b?.timestamp)
+        if (diff !== 0) return diff
+        return String(a?.id || '').localeCompare(String(b?.id || ''))
+    })
 })
 
 const sendAudioMessage = async (audioUrl, duration, content) => {

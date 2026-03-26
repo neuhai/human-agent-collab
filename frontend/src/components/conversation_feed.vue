@@ -20,6 +20,18 @@ const props = defineProps({
   }
 })
 
+const normalizeTimestamp = (ts) => {
+  if (ts == null) return 0
+  if (typeof ts === 'number') {
+    return ts < 946684800000 ? ts * 1000 : ts
+  }
+  if (typeof ts === 'string') {
+    const parsed = new Date(ts).getTime()
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
 // Filter conversations to only those involving the selected participant (chat mode)
 const filteredConversations = computed(() => {
   // If no participant is selected, show all conversations
@@ -91,9 +103,9 @@ const allMessages = computed(() => {
   })
   
   const sorted = uniqueMessages.sort((a, b) => {
-    const timeA = a.timestamp || (typeof a.timestamp === 'string' ? new Date(a.timestamp).getTime() : 0)
-    const timeB = b.timestamp || (typeof b.timestamp === 'string' ? new Date(b.timestamp).getTime() : 0)
-    return timeA - timeB
+    const diff = normalizeTimestamp(a?.timestamp) - normalizeTimestamp(b?.timestamp)
+    if (diff !== 0) return diff
+    return String(a?.id || '').localeCompare(String(b?.id || ''))
   })
   
   if (isGroupChat.value && sorted.length === 0) {

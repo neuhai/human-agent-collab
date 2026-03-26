@@ -20,11 +20,16 @@ export function initWebSocket() {
           ? window.location.origin
           : 'http://localhost:5000'
   
+  // Backend uses Flask-SocketIO with `async_mode='threading'` (see backend/app.py).
+  // In that mode, WebSocket transport is not reliably supported and can trigger
+  // 500s on `/socket.io/?transport=websocket`, causing clients to disconnect and
+  // miss critical emits (e.g. `annotation_popup`). Force long-polling for stability.
   socket = io(backendUrl, {
-    transports: ['websocket', 'polling'],
+    transports: ['polling'],
+    upgrade: false,
     reconnection: true,
     reconnectionDelay: 1000,
-    reconnectionAttempts: 5
+    reconnectionAttempts: 10
   })
 
   // Connection event handlers
@@ -65,12 +70,13 @@ export function joinSession(sessionId, role = 'researcher') {
     
     // Set up one-time listener for join confirmation
     const onJoined = (data) => {
-      if (data.session_id === sessionId) {
-        ws.off('joined_session', onJoined)
-        ws.off('error', onError)
-        console.log(`[WebSocket] Successfully joined session: ${sessionId} as ${role}`)
-        resolve(data)
-      }
+      // Server always replies with the actual session_id (UUID) used as room id.
+      // The caller might provide a session_name; don't treat that as a failure.
+      ws.off('joined_session', onJoined)
+      ws.off('error', onError)
+      const actualSessionId = data?.session_id || sessionId
+      console.log(`[WebSocket] Successfully joined session: ${actualSessionId} as ${role} (requested: ${sessionId})`)
+      resolve({ ...data, session_id: actualSessionId, requested_session_id: sessionId })
     }
     
     const onError = (error) => {
