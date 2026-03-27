@@ -307,6 +307,26 @@ const commLevel = computed(() => {
   return 'chat'
 })
 
+const normalizeTimestamp = (ts) => {
+  if (ts == null) return 0
+  if (typeof ts === 'number') {
+    // seconds vs ms (rough cutoff: 2000-01-01 in ms)
+    return ts < 946684800000 ? ts * 1000 : ts
+  }
+  if (typeof ts === 'string') {
+    const trimmed = ts.trim()
+    if (trimmed) {
+      const num = Number(trimmed)
+      if (Number.isFinite(num)) {
+        return num < 946684800000 ? num * 1000 : num
+      }
+    }
+    const parsed = new Date(ts).getTime()
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
 // Message length limit (word count) when enabled in interaction config
 const messageLengthLimit = computed(() => {
   const ml = interactionConfig.value?.messageLength
@@ -355,7 +375,7 @@ const handleMessageReceived = (message) => {
     message_type: message.message_type || 'text',
     audio_url: message.audio_url,
     duration: message.duration || 0,
-    timestamp: message.timestamp ? new Date(message.timestamp).getTime() : Date.now()
+    timestamp: normalizeTimestamp(message.timestamp) || Date.now()
   }
   
   // Add to flat messages array
