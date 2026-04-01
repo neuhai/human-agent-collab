@@ -517,33 +517,45 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
-    <MapToolbox
-      v-if="showToolbox && canDraw"
-      v-model:eraser-radius="eraserRadius"
-      :eraser-min="ERASER_RADIUS_MIN"
-      :eraser-max="ERASER_RADIUS_MAX"
-      :can-undo="canUndo"
-      :tool="tool"
-      @update:tool="onToolChange"
-      @reset="resetDrawing"
-      @undo="undoLast"
-    />
+    <aside v-if="showToolbox && canDraw" class="map-toolbox-rail">
+      <MapToolbox
+        v-model:eraser-radius="eraserRadius"
+        :eraser-min="ERASER_RADIUS_MIN"
+        :eraser-max="ERASER_RADIUS_MAX"
+        :can-undo="canUndo"
+        :tool="tool"
+        @update:tool="onToolChange"
+        @reset="resetDrawing"
+        @undo="undoLast"
+      />
+    </aside>
   </div>
 </template>
 
 <style scoped>
 .map-with-drawing {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   gap: 12px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+}
+
+.map-toolbox-rail {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  align-self: stretch;
 }
 
 .map-container {
   position: relative;
-  width: 100%;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   display: flex;

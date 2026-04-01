@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
-from sqlalchemy import DateTime, Index, Integer, MetaData, String, Text, UniqueConstraint, create_engine, func, select, text
+from sqlalchemy import DateTime, Index, Integer, MetaData, String, Text, UniqueConstraint, cast, create_engine, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
@@ -278,6 +278,10 @@ def upsert_post_session_annotations(
         return
     if not session_id or not participant_id:
         return
+    if not isinstance(annotations, dict):
+        return
+    # JSONB must receive JSON-serializable structures (no stray types from clients).
+    safe = _json_safe_payload(dict(annotations))
     SessionLocal = get_session_factory()
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
@@ -288,14 +292,14 @@ def upsert_post_session_annotations(
             )
         )
         if row:
-            row.payload = dict(annotations)
+            row.payload = safe
             row.updated_at = now
         else:
             db.add(
                 PostSessionAnnotationRow(
                     session_id=session_id,
                     participant_id=participant_id,
-                    payload=dict(annotations),
+                    payload=safe,
                     updated_at=now,
                 )
             )
@@ -377,4 +381,98 @@ def load_all_research_sessions() -> Dict[str, Dict[str, Any]]:
         for r in rows:
             if r.payload:
                 out[r.session_id] = dict(r.payload)
+        return out
+
+
+def find_session_ids_by_name(session_name: str) -> List[str]:
+    """Return session_id values whose research_sessions.session_name matches (exact)."""
+    if not is_db_configured() or not (session_name or '').strip():
+        return []
+    SessionLocal = get_session_factory()
+    name = session_name.strip()[:512]
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(ResearchSessionRow.session_id).where(ResearchSessionRow.session_name == name)
+        ).all()
+        return [str(x) for x in rows]
+
+
+def find_session_ids_by_name_from_action_logs(session_name: str) -> List[str]:
+    """
+    Resolve session_id from action_logs.payload->>'session_name' (exact match).
+    Use when research_sessions is missing or not populated; each log entry stores session_name in payload.
+    """
+    if not is_db_configured() or not (session_name or '').strip():
+        return []
+    name = session_name.strip()[:512]
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(ActionLogRow.session_id)
+            .where(cast(ActionLogRow.payload['session_name'], String) == name)
+            .distinct()
+            .order_by(ActionLogRow.session_id.asc())
+        ).all()
+        return [str(x) for x in rows]
+
+
+def list_distinct_participant_ids(session_id: str) -> List[str]:
+    """Distinct participant_id values present in action_logs for this session."""
+    if not is_db_configured() or not session_id:
+        return []
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(ActionLogRow.participant_id)
+            .where(ActionLogRow.session_id == session_id)
+            .distinct()
+            .order_by(ActionLogRow.participant_id.asc())
+        ).all()
+        return [str(x) for x in rows]
+
+
+def load_all_in_session_rows_for_session(session_id: str) -> List[Dict[str, Any]]:
+    """All in-session annotation rows for a session (every participant), chronological."""
+    if not is_db_configured() or not session_id:
+        return []
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(InSessionAnnotationRow)
+            .where(InSessionAnnotationRow.session_id == session_id)
+            .order_by(InSessionAnnotationRow.created_at.asc())
+        ).all()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            ts = r.created_at.isoformat() if r.created_at else ''
+            out.append(
+                {
+                    'participant_id': r.participant_id,
+                    'checkpoint_index': r.checkpoint_index,
+                    'transcription': r.transcription,
+                    'created_at': ts,
+                }
+            )
+        return out
+
+
+def load_all_post_session_rows_for_session(session_id: str) -> List[Dict[str, Any]]:
+    """All post-session annotation payloads for a session (one row per participant)."""
+    if not is_db_configured() or not session_id:
+        return []
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        rows = db.scalars(
+            select(PostSessionAnnotationRow).where(PostSessionAnnotationRow.session_id == session_id)
+        ).all()
+        out = []
+        for r in rows:
+            ts = r.updated_at.isoformat() if r.updated_at else ''
+            out.append(
+                {
+                    'participant_id': r.participant_id,
+                    'payload': dict(r.payload) if r.payload else {},
+                    'updated_at': ts,
+                }
+            )
         return out

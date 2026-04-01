@@ -5,7 +5,7 @@ import TradeFeed from '../components/trade_feed.vue'
 import TradeForm from '../components/TradeForm.vue'
 import BaseComponent from '../components/BaseComponent.vue'
 import MeetingRoom from '../components/MeetingRoom.vue'
-import { sendMessage as wsSendMessage, onMessageReceived, offMessageReceived } from '../services/websocket.js'
+import { sendMessage as wsSendMessage, onMessageReceived, offMessageReceived, emitTypingIndicator, onTypingIndicator } from '../services/websocket.js'
 import { captureActionContext } from '../composables/useActionCapture.js'
 
 const props = defineProps({
@@ -56,6 +56,10 @@ const props = defineProps({
     participantsList: {
         type: Array,
         default: () => []
+    },
+    typeIndicatorEnabled: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -139,6 +143,13 @@ const otherParticipants = computed(() => {
         return pId && pId !== myParticipantId.value
     })
 })
+
+/** CSS class for role badge — matches BaseComponent role_badge (map task guider / follower) */
+const roleBadgeClass = (role) => {
+    const r = String(role ?? '').toLowerCase().trim()
+    if (r === 'guider' || r === 'follower') return r
+    return 'role-other'
+}
 
 // Helper function to get participant name by ID
 const getParticipantName = (participantId) => {
@@ -355,6 +366,133 @@ const toggleVoiceRecording = async () => {
     }
 }
 
+// ---- Typing indicator (Socket.IO) ----
+const remoteTypingPeers = ref({})
+const remoteTypingTimers = {}
+let localTypingStopTimer = null
+
+const clearRemoteTypingTimer = (id) => {
+    if (remoteTypingTimers[id]) {
+        clearTimeout(remoteTypingTimers[id])
+        delete remoteTypingTimers[id]
+    }
+}
+
+const setRemotePeerTyping = (peerId, active) => {
+    const id = String(peerId)
+    clearRemoteTypingTimer(id)
+    if (!active) {
+        const next = { ...remoteTypingPeers.value }
+        delete next[id]
+        remoteTypingPeers.value = next
+        return
+    }
+    remoteTypingPeers.value = { ...remoteTypingPeers.value, [id]: true }
+    remoteTypingTimers[id] = setTimeout(() => {
+        const next = { ...remoteTypingPeers.value }
+        delete next[id]
+        remoteTypingPeers.value = next
+        delete remoteTypingTimers[id]
+    }, 4000)
+}
+
+const emitLocalTypingStopRaw = () => {
+    const sId = sessionId.value
+    const myId = myParticipantId.value
+    if (!sId || !myId) return
+    const isGroup = props.commLevel === 'groupChat' || props.commLevel === 'group_chat'
+    const receiver = isGroup ? null : selectedParticipantId.value
+    if (!isGroup && !receiver) return
+    emitTypingIndicator(sId, myId, receiver, false)
+}
+
+const flushLocalTypingStop = () => {
+    if (!props.typeIndicatorEnabled) return
+    emitLocalTypingStopRaw()
+}
+
+const onTypingInput = () => {
+    if (!props.typeIndicatorEnabled || !hasTextMedia.value) return
+    const sId = sessionId.value
+    const myId = myParticipantId.value
+    if (!sId || !myId) return
+    const isGroup = props.commLevel === 'groupChat' || props.commLevel === 'group_chat'
+    const receiver = isGroup ? null : selectedParticipantId.value
+    if (!isGroup && !receiver) return
+    const hasText = (newMessage.value || '').trim().length > 0
+    if (localTypingStopTimer) {
+        clearTimeout(localTypingStopTimer)
+        localTypingStopTimer = null
+    }
+    if (hasText) {
+        emitTypingIndicator(sId, myId, receiver, true)
+        localTypingStopTimer = setTimeout(() => {
+            localTypingStopTimer = null
+            flushLocalTypingStop()
+        }, 3500)
+    } else {
+        flushLocalTypingStop()
+    }
+}
+
+const onTypingBlur = () => {
+    if (localTypingStopTimer) {
+        clearTimeout(localTypingStopTimer)
+        localTypingStopTimer = null
+    }
+    flushLocalTypingStop()
+}
+
+const handleTypingIndicatorEvent = (payload) => {
+    if (!props.typeIndicatorEnabled) return
+    const myId = myParticipantId.value
+    if (!payload?.sender || !myId) return
+    const sender = String(payload.sender)
+    if (sender === String(myId)) return
+    const isGroup = props.commLevel === 'groupChat' || props.commLevel === 'group_chat'
+    const receiver = payload.receiver
+    if (isGroup) {
+        if (receiver != null && receiver !== '') return
+        if (payload.is_typing) setRemotePeerTyping(sender, true)
+        else setRemotePeerTyping(sender, false)
+        return
+    }
+    const otherId = selectedParticipantId.value
+    if (!otherId) return
+    const r = receiver == null || receiver === '' ? '' : String(receiver)
+    if (sender !== String(otherId) || r !== String(myId)) return
+    if (payload.is_typing) setRemotePeerTyping(sender, true)
+    else setRemotePeerTyping(sender, false)
+}
+
+const remoteTypingBanner = computed(() => {
+    const ids = Object.keys(remoteTypingPeers.value)
+    if (!ids.length) return ''
+    const names = ids.map((id) => getParticipantName(id)).filter(Boolean)
+    if (names.length === 1) return `${names[0]} is typing`
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing`
+    const head = names.slice(0, -1).join(', ')
+    const last = names[names.length - 1]
+    return `${head}, and ${last} are typing`
+})
+
+watch(
+    () => props.typeIndicatorEnabled,
+    (on) => {
+        if (!on) {
+            if (localTypingStopTimer) {
+                clearTimeout(localTypingStopTimer)
+                localTypingStopTimer = null
+            }
+            emitLocalTypingStopRaw()
+            remoteTypingPeers.value = {}
+            Object.keys(remoteTypingTimers).forEach((k) => {
+                clearTimeout(remoteTypingTimers[k])
+                delete remoteTypingTimers[k]
+            })
+        }
+    }
+)
 
 watch(
     () => props.conversations,
@@ -445,6 +583,91 @@ const messagesForSelected = computed(() => {
     })
 })
 
+const messageHistoryEl = ref(null)
+const messagesEndAnchor = ref(null)
+const showNewMessageBar = ref(false)
+/** Incremented when the selected peer (or thread) changes so message-count scroll logic does not fight participant switches */
+const participantViewEpoch = ref(0)
+
+const isNearBottom = (el, threshold = 72) => {
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+}
+
+const scrollMessageHistoryToBottom = () => {
+    const anchor = messagesEndAnchor.value
+    if (anchor) {
+        anchor.scrollIntoView({ block: 'end', behavior: 'auto' })
+        return
+    }
+    const el = messageHistoryEl.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+}
+
+/** Wait for layout/paint so scrollHeight and flex children are final (avoids one-frame gap at wrong scroll position). */
+const flushScrollToBottom = () => {
+    showNewMessageBar.value = false
+    nextTick(() => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                scrollMessageHistoryToBottom()
+            })
+        })
+    })
+}
+
+const onMessageHistoryScroll = () => {
+    const el = messageHistoryEl.value
+    if (el && isNearBottom(el)) {
+        showNewMessageBar.value = false
+    }
+}
+
+const jumpToLatestMessages = () => {
+    flushScrollToBottom()
+}
+
+watch(
+    () => messagesForSelected.value.length,
+    (newCount, oldCount) => {
+        if (oldCount === undefined) {
+            flushScrollToBottom()
+            return
+        }
+        if (newCount <= oldCount) return
+
+        const el = messageHistoryEl.value
+        const wasNearBottom = isNearBottom(el)
+        const epoch = participantViewEpoch.value
+        const list = messagesForSelected.value
+        const last = list[list.length - 1]
+        const myId = myParticipantId.value
+        const lastIsMine = myId && last && String(last.sender || last.from) === String(myId)
+
+        nextTick(() => {
+            if (epoch !== participantViewEpoch.value) return
+            // Own sends: DOM/layout may lag one frame so wasNearBottom can be wrong; always stick to bottom.
+            if (wasNearBottom || lastIsMine) {
+                flushScrollToBottom()
+            } else {
+                showNewMessageBar.value = true
+            }
+        })
+    }
+)
+
+watch(selectedParticipantId, () => {
+    participantViewEpoch.value++
+    remoteTypingPeers.value = {}
+    Object.keys(remoteTypingTimers).forEach((k) => {
+        clearTimeout(remoteTypingTimers[k])
+        delete remoteTypingTimers[k]
+    })
+    onTypingBlur()
+    flushScrollToBottom()
+})
+
 const sendAudioMessage = async (audioUrl, duration, content) => {
     const myId = myParticipantId.value
     const otherId = selectedParticipantId.value
@@ -468,6 +691,7 @@ const sendAudioMessage = async (audioUrl, duration, content) => {
         _isOptimistic: true
     }
     appendMessageToLocal(msg, isGroupChat, myId, otherId)
+    flushScrollToBottom()
 
     if (sId) {
         try {
@@ -531,6 +755,8 @@ const sendMessage = async () => {
     }
     appendMessageToLocal(msg, isGroupChat, myId, otherId)
     newMessage.value = ''
+    onTypingBlur()
+    flushScrollToBottom()
 
     if (sId) {
         try {
@@ -571,7 +797,8 @@ const handleMessageReceived = (message) => {
     const sender = message.sender
     const receiver = message.receiver
     const isGroupChat = props.commLevel === 'groupChat' || props.commLevel === 'group_chat'
-    
+    let conversationMutated = false
+
     // Convert backend message format to frontend format
     const msg = {
         id: message.id || `msg_${Date.now()}`,
@@ -622,12 +849,14 @@ const handleMessageReceived = (message) => {
                     ...localConversations.value,
                     [key]: updated
                 }
+                conversationMutated = true
             } else {
                 // Add new message
                 localConversations.value = {
                     ...localConversations.value,
                     [key]: [...existing, msg]
                 }
+                conversationMutated = true
             }
         }
     } else {
@@ -669,14 +898,20 @@ const handleMessageReceived = (message) => {
                     ...localConversations.value,
                     [key]: updated
                 }
+                conversationMutated = true
             } else {
                 // Add new message
                 localConversations.value = {
                     ...localConversations.value,
                     [key]: [...existing, msg]
                 }
+                conversationMutated = true
             }
         }
+    }
+
+    if (conversationMutated && myId && String(sender) === String(myId)) {
+        flushScrollToBottom()
     }
 }
 
@@ -695,8 +930,10 @@ watch(otherParticipants, (newParticipants) => {
 
 // Register WebSocket message listener on mount
 let cleanupMessageListener = null
+let cleanupTypingListener = null
 onMounted(() => {
     cleanupMessageListener = onMessageReceived(handleMessageReceived)
+    cleanupTypingListener = onTypingIndicator(handleTypingIndicatorEvent)
     
     // Auto-select first participant on mount if available
     if (isVisible.value && otherParticipants.value.length > 0 && !selectedParticipantId.value) {
@@ -704,12 +941,22 @@ onMounted(() => {
         selectParticipant(firstParticipant, true) // true = isAutoSelect
         console.log('[SocialPanel] Auto-selected first participant on mount:', firstParticipant?.id || firstParticipant?.participant_id)
     }
+    nextTick(() => flushScrollToBottom())
 })
 
 onUnmounted(() => {
+    showNewMessageBar.value = false
     if (cleanupMessageListener) {
         cleanupMessageListener()
     }
+    if (cleanupTypingListener) {
+        cleanupTypingListener()
+    }
+    Object.keys(remoteTypingTimers).forEach((k) => {
+        clearTimeout(remoteTypingTimers[k])
+        delete remoteTypingTimers[k]
+    })
+    if (localTypingStopTimer) clearTimeout(localTypingStopTimer)
 })
 </script>
 
@@ -723,7 +970,10 @@ onUnmounted(() => {
                 @click="selectParticipant(p)"
             >
                 <div class="participant-info">
-                    <div class="participant-name">{{ p?.name || (p?.id || p?.participant_id) }}</div>
+                    <div class="participant-name-row">
+                        <span class="participant-name">{{ p?.name || (p?.id || p?.participant_id) }}</span>
+                        <span v-if="p?.role" class="role-badge" :class="roleBadgeClass(p.role)">{{ p.role }}</span>
+                    </div>
                 </div>
             </div>
 
@@ -839,7 +1089,8 @@ onUnmounted(() => {
                         </button>
                     </div>
                     <div v-if="!hasMeetingRoomMedia || chatUnfolded" class="chat-section" :class="{ 'chat-one-third': hasMeetingRoomMedia && chatUnfolded }">
-                    <div class="message-history">
+                    <div class="message-thread-wrap">
+                        <div class="message-history" ref="messageHistoryEl" @scroll="onMessageHistoryScroll">
                         <template v-for="message in messagesForSelected" :key="message.id">
                             <!-- Text message -->
                             <div
@@ -882,13 +1133,26 @@ onUnmounted(() => {
                         <div v-if="!messagesForSelected.length" class="empty">
                             No messages yet
                         </div>
+                        <div ref="messagesEndAnchor" class="messages-end-anchor" aria-hidden="true" />
+                        </div>
+                        <button
+                            v-if="showNewMessageBar"
+                            type="button"
+                            class="new-message-bar"
+                            @click="jumpToLatestMessages"
+                        >
+                            You have a new message
+                        </button>
                     </div>
 
+                    <div v-if="typeIndicatorEnabled && remoteTypingBanner" class="typing-indicator-banner">{{ remoteTypingBanner }}</div>
                     <div class="message-input-area">
                         <input
                             v-if="hasTextMedia"
                             v-model="newMessage"
                             @keyup.enter="sendMessage"
+                            @input="onTypingInput"
+                            @blur="onTypingBlur"
                             placeholder="Type your message..."
                             class="message-input"
                         />
@@ -925,7 +1189,7 @@ onUnmounted(() => {
     background-color: #ffffff;
     display: flex;
     flex-direction: column;
-    flex: 2;
+    flex: 4;
     height: 100%;
     min-height: 0;
     overflow: hidden;
@@ -1037,6 +1301,45 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.message-thread-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.new-message-bar {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    z-index: 5;
+    margin: 0;
+    padding: 8px 18px;
+    border-radius: 999px;
+    border: none;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+    white-space: nowrap;
+}
+
+.new-message-bar:hover {
+    filter: brightness(1.06);
+}
+
+.messages-end-anchor {
+    height: 1px;
+    width: 100%;
+    flex-shrink: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
 .message-history {
     flex: 1;
     min-height: 0;
@@ -1089,7 +1392,8 @@ onUnmounted(() => {
 }
 
 .message-content {
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.45;
   color: #374151;
 }
 
@@ -1167,6 +1471,14 @@ onUnmounted(() => {
   align-self: flex-end;
   opacity: 0.7;
   text-align: right;
+}
+
+.typing-indicator-banner {
+    flex-shrink: 0;
+    padding: 6px 12px 0;
+    font-size: 12px;
+    color: #6b7280;
+    font-style: italic;
 }
 
 .message-input-area {
@@ -1281,11 +1593,54 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
+    flex: 1;
+    width: 100%;
+}
+
+.participant-name-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
 }
 
 .participant-name {
     font-size: 12px;
     font-weight: 600;
+    color: #374151;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Same colors as BaseComponent .control-role-badge .role-badge (My Status — My Role) */
+.role-badge {
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: capitalize;
+    line-height: 1.2;
+}
+
+.role-badge.guider {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.role-badge.follower {
+    background: #d1fae5;
+    color: #047857;
+}
+
+.role-badge.role-other {
+    background: #f3f4f6;
     color: #374151;
 }
 

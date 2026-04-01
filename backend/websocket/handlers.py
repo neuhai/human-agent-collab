@@ -432,6 +432,43 @@ def register_handlers(socketio):
             except Exception:
                 pass
 
+    @socketio.on('typing_indicator')
+    def handle_typing_indicator(data):
+        """Broadcast typing state to everyone in the session room (clients filter by thread)."""
+        try:
+            session_id = data.get('session_id')
+            sender = data.get('sender')
+            receiver = data.get('receiver')
+            is_typing = bool(data.get('is_typing', False))
+            if not session_id or not sender:
+                return
+
+            import routes.session as session_module
+            sessions = session_module.sessions
+
+            actual_session_id = None
+            for sid, session in sessions.items():
+                if session.get('session_id') == session_id or sid == session_id:
+                    actual_session_id = session.get('session_id') or sid
+                    break
+                elif session.get('session_name') == session_id:
+                    actual_session_id = session.get('session_id') or sid
+                    break
+
+            if not actual_session_id:
+                return
+
+            payload = {
+                'session_id': actual_session_id,
+                'sender': sender,
+                'receiver': receiver,
+                'is_typing': is_typing,
+            }
+            socketio_inst = get_socketio()
+            socketio_inst.emit('typing_indicator', payload, room=actual_session_id)
+        except Exception as e:
+            print(f'[WebSocket] Error handling typing_indicator: {e}')
+
     # Meeting room: participant_id -> socket_id mapping per session
     meeting_participants = {}  # session_id -> { participant_id: socket_id }
 

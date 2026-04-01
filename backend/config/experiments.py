@@ -32,6 +32,7 @@ EXPERIMENTS = [
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
                 {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."},
+                {'label': "Type Indicator", 'type': "boolean", 'default': "not_enabled", 'options': ["Enabled", "Not Enabled"], 'path': 'Session.Interaction.typeIndicator', 'description': "When enabled, others see who is currently typing in the text chat (private threads or group chat)."},
                 {
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
@@ -238,6 +239,7 @@ EXPERIMENTS = [
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
                 {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."},
+                {'label': "Type Indicator", 'type': "boolean", 'default': "not_enabled", 'options': ["Enabled", "Not Enabled"], 'path': 'Session.Interaction.typeIndicator', 'description': "When enabled, others see who is currently typing in the text chat (private threads or group chat)."},
                 {
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
@@ -379,6 +381,7 @@ EXPERIMENTS = [
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
                 {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."},
+                {'label': "Type Indicator", 'type': "boolean", 'default': "not_enabled", 'options': ["Enabled", "Not Enabled"], 'path': 'Session.Interaction.typeIndicator', 'description': "When enabled, others see who is currently typing in the text chat (private threads or group chat)."},
                 {
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
@@ -509,7 +512,8 @@ EXPERIMENTS = [
         'interaction': {
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."}
+                {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."},
+                {'label': "Type Indicator", 'type': "boolean", 'default': "not_enabled", 'options': ["Enabled", "Not Enabled"], 'path': 'Session.Interaction.typeIndicator', 'description': "When enabled, others see who is currently typing in the text chat (private threads or group chat)."},
             ],
             "Agent Behaviors": [
                 {'label': "Agent Perception Time Window (sec)", 'type': "number", 'default': 15, 'path': 'Session.Interaction.agentPerceptionTimeWindow', 'description': "Frequency (in seconds) at which agents update their view of the game state."},
@@ -587,7 +591,8 @@ EXPERIMENTS = [
         "interaction": {
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."}
+                {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."},
+                {'label': "Type Indicator", 'type': "boolean", 'default': "not_enabled", 'options': ["Enabled", "Not Enabled"], 'path': 'Session.Interaction.typeIndicator', 'description': "When enabled, others see who is currently typing in the text chat (private threads or group chat)."},
             ],
             "Awareness Dashboard": [
                 {
@@ -724,6 +729,7 @@ EXPERIMENTS = [
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
                 {'label': "Communication Media", 'type': "multi_checkbox", 'default': ["text"], 'options': [{"label": "Text Message", "value": "text", "description": "Participants type messages"}, {"label": "Audio", "value": "audio", "description": "Voice input with Whisper transcription"}, {"label": "Meeting Room", "value": "meeting_room", "description": "Real-time video/audio like Zoom"}], 'path': 'Session.Interaction.communicationMedia', 'description': "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."},
+                {'label': "Type Indicator", 'type': "boolean", 'default': "not_enabled", 'options': ["Enabled", "Not Enabled"], 'path': 'Session.Interaction.typeIndicator', 'description': "When enabled, others see who is currently typing in the text chat (private threads or group chat)."},
                 {
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
@@ -751,22 +757,6 @@ EXPERIMENTS = [
             'auto_start': False,
         },
         "interface": {
-            "My Status": [
-                {
-                    "id": "my_status",
-                    "label": "My Status",
-                    "visible_if": "true",
-                    "bindings": [
-                        {
-                            "label": "My Role",
-                            "path": "Participant.role",
-                            "control": "list",
-                            "options": ["guider", "follower"],
-                            "default": "guider"
-                        }
-                    ]
-                }
-            ],
             "My Tasks": [
                 {
                     "id": "my_tasks",

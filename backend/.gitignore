@@ -1,6 +1,9 @@
 # Action logs (session-specific)
 logs/
 
+# CLI export_session_data.py output
+exports/
+
 uploads/
 
 # Python

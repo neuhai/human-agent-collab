@@ -13,6 +13,7 @@ const conversations = inject('conversations', ref({}))
 const messages = inject('messages', ref([]))
 const activeConversations = inject('activeConversations', computed(() => 0))
 const interactionConfig = inject('interactionConfig', ref({}))
+const liveTypingBySender = inject('liveTypingBySender', ref({}))
 const allParticipants = inject('allParticipants', ref([]))
 const participantsMap = inject('participantsMap', computed(() => ({})))
 
@@ -150,6 +151,34 @@ const selectParticipant = (participant) => {
     console.log('[Monitor] Selected participant:', selectedParticipant.value, 'from participant:', participant)
   }
 }
+
+const monitorCommIsGroup = computed(() => {
+  const level = String(interactionConfig.value?.communicationLevel || '').toLowerCase()
+  return level.includes('group')
+})
+
+const typeIndicatorEnabledMonitor = computed(() => interactionConfig.value?.typeIndicator === 'enabled')
+
+const typingSenderIdsForConversation = computed(() => {
+  if (!typeIndicatorEnabledMonitor.value) return []
+  const raw = liveTypingBySender.value || {}
+  const entries = Object.entries(raw).filter(([, v]) => v && typeof v === 'object')
+  const isGroup = monitorCommIsGroup.value
+  const sel = selectedParticipant.value
+
+  return entries
+    .filter(([senderId, v]) => {
+      const R = v.receiver
+      if (isGroup) return R == null || R === ''
+      if (!sel) return false
+      if (R == null || R === '') return false
+      const s = String(senderId)
+      const r = String(R)
+      const a = String(sel)
+      return s === a || r === a
+    })
+    .map(([senderId]) => String(senderId))
+})
 </script>
 
 <template>
@@ -204,6 +233,8 @@ const selectParticipant = (participant) => {
                   :commLevel="interactionConfig.communicationLevel || 'chat'"
                   :selected-participant="selectedParticipant"
                   :participants="participantsMap"
+                  :type-indicator-enabled="typeIndicatorEnabledMonitor"
+                  :typing-sender-ids="typingSenderIdsForConversation"
               />
             </div>
           </div>
@@ -385,8 +416,9 @@ const selectParticipant = (participant) => {
 }
 
 .participant-list-sidebar {
-  width: 150px;
-  min-width: 150px;
+  width: 108px;
+  min-width: 108px;
+  max-width: 108px;
   border-right: 1px solid #e5e7eb;
   display: flex;
   flex-direction: column;
@@ -405,14 +437,14 @@ const selectParticipant = (participant) => {
 .participant-list-content {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 6px;
 }
 
 .participant-list-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 8px 6px;
   margin-bottom: 4px;
   border-radius: 6px;
   cursor: pointer;
@@ -431,13 +463,16 @@ const selectParticipant = (participant) => {
 }
 
 .participant-list-name {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   color: #1f2937;
   flex: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 .participant-list-status {

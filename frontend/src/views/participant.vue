@@ -33,6 +33,7 @@ const tooltipPosition = ref({ x: 0, y: 0 })
 const tooltipContent = {
   rules: 'View the experiment rules and instructions.',
   sessionStatus: 'Current status of the experiment session: Waiting, Running, or Paused.',
+  role: 'Your assigned role in this session (e.g. Guider or Follower in the Map Task).',
 }
 
 const showTooltip = (tooltipId, event) => {
@@ -56,6 +57,7 @@ const logout = () => {
   sessionStorage.removeItem('session_code')
   sessionStorage.removeItem('session_id')
   sessionStorage.removeItem('participant_interface')
+  sessionStorage.removeItem('participant_role')
   router.push('/login')
 }
 
@@ -258,6 +260,33 @@ const applyInterface = (ui) => {
 // Store all participants for Info Dashboard
 const allParticipants = ref([])
 
+/** Synced from session / sessionStorage; used for Map Task header role badge */
+const experimentType = ref(sessionStorage.getItem('experiment_type') || '')
+
+const mapTaskRoleForHeader = computed(() => {
+  if (experimentType.value !== 'maptask') return ''
+  const myId = sessionStorage.getItem('participant_id')
+  const me = allParticipants.value.find((p) => p?.id === myId || p?.participant_id === myId)
+  const fromApi = me?.role != null ? String(me.role).trim() : ''
+  const fromStore = (sessionStorage.getItem('participant_role') || '').trim()
+  return fromApi || fromStore
+})
+
+const headerRoleBadgeClass = computed(() => {
+  const r = String(mapTaskRoleForHeader.value || '').toLowerCase()
+  if (r === 'guider') return 'guider'
+  if (r === 'follower') return 'follower'
+  return 'role-other'
+})
+
+/** Role text only (inside the colored tag); prefix "You are:" is outside the tag */
+const mapTaskRoleHeaderPretty = computed(() => {
+  const raw = mapTaskRoleForHeader.value
+  if (!raw) return ''
+  const role = String(raw).trim()
+  return role.charAt(0).toUpperCase() + role.slice(1).toLowerCase()
+})
+
 // Store conversations and messages for Social Panel
 const conversations = ref({}) // Format: { "from_to": [messages] }
 const messages = ref([]) // Flat array of all messages
@@ -344,6 +373,8 @@ const communicationMedia = computed(() => {
   }
   return ['text']
 })
+
+const typeIndicatorEnabled = computed(() => interactionConfig.value?.typeIndicator === 'enabled')
 
 // In-session annotation popup state
 const showAnnotationPopup = ref(false)
@@ -452,6 +483,13 @@ const participantsUpdateHandler = (data) => {
   allParticipants.value = list
 
   const me = list.find((p) => p?.id === myParticipantId || p?.participant_id === myParticipantId)
+  if (
+    experimentType.value === 'maptask' &&
+    me?.role != null &&
+    String(me.role).trim() !== ''
+  ) {
+    sessionStorage.setItem('participant_role', String(me.role).trim())
+  }
   if (!me) {
     console.log('[Participant] My participant not found in list:', { 
       myId: myParticipantId,
@@ -594,6 +632,14 @@ const fetchSessionConfig = async () => {
     })
     if (response.ok) {
       const session = await response.json()
+      const et = session.experiment_type || session.experiment_config?.id
+      if (et) {
+        experimentType.value = et
+        sessionStorage.setItem('experiment_type', et)
+        if (et !== 'maptask') {
+          sessionStorage.removeItem('participant_role')
+        }
+      }
       if (session.interaction) {
         interactionConfig.value = session.interaction
         console.log('[Participant] Updated interaction config from session:', interactionConfig.value)
@@ -628,6 +674,13 @@ const fetchParticipants = async () => {
         // Also apply interface if available
         const myParticipantId = sessionStorage.getItem('participant_id')
         const me = data.participants.find((p) => p?.id === myParticipantId || p?.participant_id === myParticipantId)
+        if (
+          experimentType.value === 'maptask' &&
+          me?.role != null &&
+          String(me.role).trim() !== ''
+        ) {
+          sessionStorage.setItem('participant_role', String(me.role).trim())
+        }
         if (me && me.interface) {
           console.log('[Participant] Applying interface from fetchParticipants:', me.interface)
           applyInterface(me.interface)
@@ -1629,10 +1682,12 @@ const handleInvestmentSubmit = async (data) => {
 }
 
 onMounted(async () => {
-  // 1) Fetch participants initially (this will also apply interface)
+  // 1) Session first so experiment type is correct (Map Task header role / participant_role persistence)
+  await fetchSessionConfig()
+  // 2) Fetch participants (applies interface)
   await fetchParticipants()
-  
-  // 2) Also try to apply config from sessionStorage if fetchParticipants didn't work
+
+  // 4) Also try to apply config from sessionStorage if fetchParticipants didn't work
   const raw = sessionStorage.getItem('participant_interface')
   if (raw) {
     try {
@@ -1644,7 +1699,7 @@ onMounted(async () => {
     }
   }
   
-  // 3) Fetch trade data initially
+  // 5) Fetch trade data initially
   await fetchTradeData()
   
   // Note: Trade data updates are now handled via WebSocket broadcasts (participants_updated with update_type='trade_update')
@@ -1897,6 +1952,16 @@ onUnmounted(() => {
           <button @click="showRulesPopup" class="rules-btn">Rules</button>
           <span class="tooltip-icon" @mouseenter="showTooltip('rules', $event)" @mousemove="updateTooltipPosition" @mouseleave="hideTooltip">ⓘ</span>
         </span>
+        <span v-if="mapTaskRoleForHeader" class="header-role-wrap">
+          <span class="header-role-prefix">You are:</span>
+          <span
+            class="header-role-tag"
+            :class="headerRoleBadgeClass"
+            @mouseenter="showTooltip('role', $event)"
+            @mousemove="updateTooltipPosition"
+            @mouseleave="hideTooltip"
+          >{{ mapTaskRoleHeaderPretty }}</span>
+        </span>
       </div>
       <div class="header-center">
         <div class="timer-display">
@@ -1941,6 +2006,7 @@ onUnmounted(() => {
           :comm-level="commLevel"
           :message-length-limit="messageLengthLimit"
           :communication-media="communicationMedia"
+          :type-indicator-enabled="typeIndicatorEnabled"
           :pending-offers="pendingOffers"
           :completed-trades="completedTrades"
           @submit-trade="handleTradeSubmit"
@@ -2073,6 +2139,48 @@ onUnmounted(() => {
   display: flex;
   flex-direction: row;
   gap: 8px;
+  align-items: center;
+}
+
+/* Map Task: "You are:" plain + role pill */
+.header-role-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.header-role-prefix {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  white-space: nowrap;
+}
+
+/* Map Task: role pill next to Rules (matches social_panel / awareness role badges) */
+.header-role-tag {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: default;
+}
+
+.header-role-tag.guider {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.header-role-tag.follower {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.header-role-tag.role-other {
+  background: #f3f4f6;
+  color: #374151;
 }
 
 /* Session Status Indicator */

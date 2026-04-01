@@ -1,5 +1,5 @@
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, watch, ref, nextTick, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
   commLevel: {
@@ -17,6 +17,15 @@ const props = defineProps({
   participants: {
     type: Object,
     default: () => ({})
+  },
+  typeIndicatorEnabled: {
+    type: Boolean,
+    default: false
+  },
+  /** Participant ids currently typing (relevant to this view); names resolved via participants. */
+  typingSenderIds: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -139,6 +148,17 @@ const getParticipantType = (id) => {
   return props.participants[id]?.type || 'participant'
 }
 
+const typingBannerText = computed(() => {
+  if (!props.typeIndicatorEnabled || !props.typingSenderIds?.length) return ''
+  const names = props.typingSenderIds.map((id) => getDisplayName(id)).filter(Boolean)
+  if (names.length === 0) return ''
+  if (names.length === 1) return `${names[0]} is typing`
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing`
+  const head = names.slice(0, -1).join(', ')
+  const last = names[names.length - 1]
+  return `${head}, and ${last} are typing`
+})
+
 const formatTime = (timestamp) => {
   if (!timestamp) return 'N/A'
   const date = new Date(timestamp)
@@ -180,6 +200,94 @@ const playAudio = (url) => {
   const audio = new Audio(fullUrl)
   audio.play().catch(e => console.error('[ConversationFeed] Audio play error:', e))
 }
+
+// ---- Scroll: new-message banner + stick-to-bottom ----
+const groupScrollEl = ref(null)
+const privateScrollEl = ref(null)
+const showNewMessageBar = ref(false)
+
+const totalMessageCount = computed(() => {
+  if (isGroupChat.value) return allMessages.value.length
+  return Object.values(filteredConversations.value).reduce(
+    (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
+    0
+  )
+})
+
+const getActiveScrollEl = () => {
+  if (props.commLevel === 'no_chat') return null
+  if (isGroupChat.value) return groupScrollEl.value
+  return privateScrollEl.value
+}
+
+const isNearBottom = (el, threshold = 72) => {
+  if (!el) return true
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+}
+
+const scrollActiveToBottom = () => {
+  const el = getActiveScrollEl()
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+const onMessageScroll = () => {
+  const el = getActiveScrollEl()
+  if (el && isNearBottom(el)) {
+    showNewMessageBar.value = false
+  }
+}
+
+const jumpToLatestMessages = () => {
+  showNewMessageBar.value = false
+  nextTick(() => {
+    scrollActiveToBottom()
+  })
+}
+
+watch(totalMessageCount, (newCount, oldCount) => {
+  if (oldCount === undefined) {
+    nextTick(() => {
+      scrollActiveToBottom()
+      showNewMessageBar.value = false
+    })
+    return
+  }
+  if (newCount <= oldCount) return
+
+  const el = getActiveScrollEl()
+  const wasNearBottom = isNearBottom(el)
+
+  nextTick(() => {
+    if (wasNearBottom) {
+      scrollActiveToBottom()
+      showNewMessageBar.value = false
+    } else {
+      showNewMessageBar.value = true
+    }
+  })
+})
+
+watch(
+  () => props.selectedParticipant,
+  () => {
+    showNewMessageBar.value = false
+    nextTick(() => scrollActiveToBottom())
+  }
+)
+
+watch(isGroupChat, () => {
+  showNewMessageBar.value = false
+  nextTick(() => scrollActiveToBottom())
+})
+
+onMounted(() => {
+  nextTick(() => scrollActiveToBottom())
+})
+
+onUnmounted(() => {
+  showNewMessageBar.value = false
+})
 </script>
 
 <template>
@@ -200,8 +308,9 @@ const playAudio = (url) => {
       </div>
       
       <!-- Group Chat Message Thread -->
-      <div class="message-thread">
-        <div class="message-history" ref="messageHistory">
+      <div class="thread-scroll-outer">
+        <div class="message-thread" ref="groupScrollEl" @scroll="onMessageScroll">
+          <div class="message-history">
           <template v-for="(message, index) in allMessages" :key="`group-${message.id || index}-${message.timestamp}`">
             <div v-if="(message.message_type || 'text') === 'text'" class="message-item group-chat-message">
               <div class="message-sender">{{ getDisplayName(message.from || message.sender) }}</div>
@@ -231,7 +340,17 @@ const playAudio = (url) => {
               <span v-if="conversations['group']">, group key has {{ conversations['group'].length }} messages</span>
             </p>
           </div>
+          </div>
         </div>
+        <button
+          v-if="showNewMessageBar"
+          type="button"
+          class="new-message-bar"
+          @click="jumpToLatestMessages"
+        >
+          You have a new message
+        </button>
+        <div v-if="typingBannerText" class="typing-indicator-bar">{{ typingBannerText }}</div>
       </div>
     </div>
     
@@ -251,7 +370,8 @@ const playAudio = (url) => {
           </span>
         </div>
         
-        <div class="conversation-messages">
+        <div class="thread-scroll-outer conversation-messages-wrap">
+          <div class="conversation-messages" ref="privateScrollEl" @scroll="onMessageScroll">
           <div v-if="Object.keys(filteredConversations).length === 0" class="no-conversation">
             <p v-if="selectedParticipant">No conversations yet for {{ getDisplayName(selectedParticipant) }}</p>
             <p v-else>No conversations yet</p>
@@ -289,6 +409,16 @@ const playAudio = (url) => {
               </template>
             </div>
           </div>
+          </div>
+          <button
+            v-if="showNewMessageBar"
+            type="button"
+            class="new-message-bar"
+            @click="jumpToLatestMessages"
+          >
+            You have a new message
+          </button>
+          <div v-if="typingBannerText" class="typing-indicator-bar">{{ typingBannerText }}</div>
         </div>
         
         <div class="conversation-stats">
@@ -354,6 +484,42 @@ const playAudio = (url) => {
   color: #6b7280;
 }
 
+.thread-scroll-outer {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-messages-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.new-message-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 5;
+  margin: 0;
+  padding: 10px 22px;
+  border-radius: 999px;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+  white-space: nowrap;
+}
+
+.new-message-bar:hover {
+  filter: brightness(1.06);
+}
+
 .message-thread {
   flex: 1;
   min-height: 0;
@@ -378,7 +544,7 @@ const playAudio = (url) => {
 .message-sender {
   color: #667eea;
   font-weight: 600;
-  font-size: 11px;
+  font-size: 12px;
   margin-bottom: 4px;
 }
 
@@ -387,7 +553,8 @@ const playAudio = (url) => {
 }
 
 .message-content {
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.45;
   color: #374151;
 }
 
@@ -397,7 +564,7 @@ const playAudio = (url) => {
 }
 
 .message-time {
-  font-size: 10px;
+  font-size: 11px;
   color: #666;
   align-self: flex-end;
   opacity: 0.7;
@@ -434,7 +601,7 @@ const playAudio = (url) => {
   border: none;
   cursor: pointer;
   padding: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: inherit;
 }
 .audio-icon {
@@ -448,7 +615,8 @@ const playAudio = (url) => {
   padding: 8px 12px;
   background: #f8f9fa;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.45;
   color: #374151;
   border: 1px solid #e5e7eb;
 }
@@ -584,6 +752,16 @@ const playAudio = (url) => {
   padding: 40px 20px;
   color: #9ca3af;
   font-size: 14px;
+}
+
+.typing-indicator-bar {
+  flex-shrink: 0;
+  padding: 8px 16px 10px;
+  font-size: 12px;
+  color: #6b7280;
+  font-style: italic;
+  border-top: 1px solid #e5e7eb;
+  background: #fafafa;
 }
 </style>
 

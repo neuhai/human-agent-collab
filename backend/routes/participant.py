@@ -1764,6 +1764,12 @@ def get_post_annotation_data(session_identifier):
         except Exception as e:
             print(f'[PostAnnotation] presign saved assets: {e}')
 
+        experiment_type = ''
+        if found_session:
+            experiment_type = (found_session.get('experiment_type') or '')[:128]
+        elif filtered_entries:
+            experiment_type = (filtered_entries[0].get('experiment_type') or '')[:128]
+
         return jsonify({
             'merged_logs': filtered_entries,
             'annotation_moments': annotation_moments,
@@ -1774,6 +1780,7 @@ def get_post_annotation_data(session_identifier):
             'files_base': files_base,
             'session_id': session_id,
             'session_name': session_name,
+            'experiment_type': experiment_type,
             'session_duration_seconds': session_duration_seconds,
             'session_started_at': session_started_at,
         })
@@ -1798,19 +1805,32 @@ def save_post_annotations(session_identifier, participant_id):
             return jsonify({'error': 'annotations object required'}), 400
 
         annotations = data.get('annotations', {})
+        if not isinstance(annotations, dict):
+            return jsonify({'error': 'annotations must be a JSON object'}), 400
+
+        from services.db import _json_safe_payload, is_db_configured, upsert_post_session_annotations
+
+        safe = _json_safe_payload(annotations)
+
+        # When DATABASE_URL is set, persist to PostgreSQL; failures must not look like success.
+        if is_db_configured():
+            try:
+                upsert_post_session_annotations(session_id, participant_id, safe)
+            except Exception as db_err:
+                import traceback
+
+                traceback.print_exc()
+                return jsonify({'error': f'Database save failed: {db_err}'}), 500
+
         session_dir = os.path.join(LOGS_BASE_DIR, session_id)
         os.makedirs(session_dir, exist_ok=True)
         ann_path = os.path.join(session_dir, f'post_annotations_{participant_id}.json')
 
-        with open(ann_path, 'w', encoding='utf-8') as f:
-            json.dump(annotations, f, ensure_ascii=False, indent=2)
-
         try:
-            from services.db import upsert_post_session_annotations
-
-            upsert_post_session_annotations(session_id, participant_id, annotations)
-        except Exception as db_err:
-            print(f'[PostAnnotation] DB upsert post_annotations: {db_err}')
+            with open(ann_path, 'w', encoding='utf-8') as f:
+                json.dump(safe, f, ensure_ascii=False, indent=2)
+        except OSError as file_err:
+            return jsonify({'error': f'Failed to write annotation file: {file_err}'}), 500
 
         return jsonify({'success': True})
     except Exception as e:

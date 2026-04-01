@@ -3,7 +3,7 @@ import { ref, computed, provide, watch, onMounted, onUnmounted } from 'vue'
 import Setup from '../components/setup.vue'
 import Monitor from '../components/monitor.vue'
 import Analysis from '../components/analysis.vue'
-import { joinSession, leaveSession, onMessageReceived, offMessageReceived, onParticipantsUpdate, offParticipantsUpdate, getSocket } from '../services/websocket.js'
+import { joinSession, leaveSession, onMessageReceived, offMessageReceived, onParticipantsUpdate, offParticipantsUpdate, onTypingIndicator, getSocket } from '../services/websocket.js'
 
 // Experiments configuration - loaded from backend API (single source of truth)
 // Fallback used only if API fails; backend experiments.py is the source of truth
@@ -282,22 +282,6 @@ const FALLBACK_EXPERIMENTS = [
             'auto_start': false,
         },
         "interface": {
-            "My Status": [
-                {
-                    "id": "my_status",
-                    "label": "My Status",
-                    "visible_if": "true",
-                    "bindings": [
-                        {
-                            "label": "My Role",
-                            "path": "Participant.role",
-                            "control": "list",
-                            "options": ["guider", "follower"],
-                            "default": "guider"
-                        }
-                    ]
-                }
-            ],
             "My Tasks": [
                 {
                     "id": "my_tasks",
@@ -410,6 +394,9 @@ const activeConversations = computed(() => {
   return Object.keys(conversations.value).length
 })
 const interactionConfig = ref({}) // Will be updated from session config
+/** Live typing for monitor: senderId -> { receiver: string|null } (entry removed after idle timeout). */
+const liveTypingBySender = ref({})
+const typingExpiryTimers = {}
 const allParticipants = ref([]) // Array of participant objects
 const pendingOffers = ref([]) // Pending trade offers
 const completedTrades = ref([]) // Completed trades
@@ -458,6 +445,7 @@ provide('pendingOffers', pendingOffers)
 provide('completedTrades', completedTrades)
 provide('totalTrades', totalTrades)
 provide('pendingTrades', pendingTrades)
+provide('liveTypingBySender', liveTypingBySender)
 
 // Computed properties for button states
 const canStartExperiment = computed(() => {
@@ -659,6 +647,12 @@ watch([currentSessionId, currentSessionName, isSessionCreated], async () => {
     conversations.value = {}
     messages.value = []
     allParticipants.value = []
+    Object.keys(typingExpiryTimers).forEach((k) => {
+      const t = typingExpiryTimers[k]
+      if (t) clearTimeout(t)
+      delete typingExpiryTimers[k]
+    })
+    liveTypingBySender.value = {}
   }
   
   // Join new session if it exists and is created
@@ -746,6 +740,12 @@ watch([currentSessionId, currentSessionName, isSessionCreated], async () => {
     conversations.value = {}
     messages.value = []
     allParticipants.value = []
+    Object.keys(typingExpiryTimers).forEach((k) => {
+      const t = typingExpiryTimers[k]
+      if (t) clearTimeout(t)
+      delete typingExpiryTimers[k]
+    })
+    liveTypingBySender.value = {}
   }
 }, { immediate: true })
 
@@ -982,10 +982,35 @@ const handleTimerUpdate = (data) => {
   }
 }
 
+const handleTypingIndicatorPayload = (payload) => {
+  if (interactionConfig.value?.typeIndicator !== 'enabled') return
+  if (!payload?.sender) return
+  const sid = String(payload.sender)
+  if (typingExpiryTimers[sid]) {
+    clearTimeout(typingExpiryTimers[sid])
+    delete typingExpiryTimers[sid]
+  }
+  if (!payload.is_typing) {
+    const next = { ...liveTypingBySender.value }
+    delete next[sid]
+    liveTypingBySender.value = next
+    return
+  }
+  const receiver = payload.receiver == null || payload.receiver === '' ? null : String(payload.receiver)
+  liveTypingBySender.value = { ...liveTypingBySender.value, [sid]: { receiver } }
+  typingExpiryTimers[sid] = setTimeout(() => {
+    const next = { ...liveTypingBySender.value }
+    delete next[sid]
+    liveTypingBySender.value = next
+    delete typingExpiryTimers[sid]
+  }, 4000)
+}
+
 // Register WebSocket listeners
 let cleanupMessageListener = null
 let cleanupParticipantsListener = null
 let cleanupTimerListener = null
+let cleanupTypingListener = null
 watch([currentJoinedSession, isSessionCreated], () => {
   // Clean up old listeners
   if (cleanupMessageListener) {
@@ -1000,6 +1025,10 @@ watch([currentJoinedSession, isSessionCreated], () => {
     cleanupTimerListener()
     cleanupTimerListener = null
   }
+  if (cleanupTypingListener) {
+    cleanupTypingListener()
+    cleanupTypingListener = null
+  }
   
   // Register new listeners when session is joined
   if (currentJoinedSession.value && isSessionCreated.value) {
@@ -1007,6 +1036,7 @@ watch([currentJoinedSession, isSessionCreated], () => {
     
     cleanupMessageListener = onMessageReceived(handleMessageReceived)
     cleanupParticipantsListener = onParticipantsUpdate(handleParticipantsUpdate)
+    cleanupTypingListener = onTypingIndicator(handleTypingIndicatorPayload)
     
     // Register timer update listener
     const timerUpdateHandler = (data) => {
@@ -1017,7 +1047,7 @@ watch([currentJoinedSession, isSessionCreated], () => {
       ws.off('timer_update', timerUpdateHandler)
     }
     
-    console.log('[Researcher] Registered WebSocket listeners (message_received, participants_updated, timer_update)')
+    console.log('[Researcher] Registered WebSocket listeners (message_received, participants_updated, timer_update, typing_indicator)')
   }
 }, { immediate: true })
 
@@ -1039,6 +1069,10 @@ onUnmounted(() => {
   if (cleanupTimerListener) {
     cleanupTimerListener()
     cleanupTimerListener = null
+  }
+  if (cleanupTypingListener) {
+    cleanupTypingListener()
+    cleanupTypingListener = null
   }
   if (currentJoinedSession.value) {
     leaveSession(currentJoinedSession.value)

@@ -4,6 +4,7 @@ import ParticipantInterface from '../views/participant.vue'
 import ResearcherDashboard from '../views/researcher.vue'
 import AnnotationTest from '../views/annotation_test.vue'
 import PostSessionAnnotation from '../views/PostSessionAnnotation.vue'
+import PostAnnotationLogin from '../views/post_annotation_login.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -16,6 +17,11 @@ const router = createRouter({
       path: '/annotation-test',
       name: 'annotation-test',
       component: AnnotationTest
+    },
+    {
+      path: '/post-annotation-login',
+      name: 'post-annotation-login',
+      component: PostAnnotationLogin
     },
     {
       path: '/post-annotation',

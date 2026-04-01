@@ -2,36 +2,39 @@
   <div class="login-container">
     <div class="login-card">
       <div class="header">
-        <h1>Participant Login</h1>
+        <h1>Post-Session Annotation</h1>
+        <p class="subtitle">Sign in with the same participant and session names you used in the study</p>
       </div>
 
       <form @submit.prevent="handleLogin" class="login-form">
         <div class="input-group">
-          <label for="participantName">Participant Name</label>
+          <label for="paParticipantName">Participant name</label>
           <input
-            id="participantName"
+            id="paParticipantName"
             v-model="participantName"
             type="text"
             required
-            placeholder="Enter your Participant Name (e.g., Jack)"
+            autocomplete="username"
+            placeholder="e.g. Jack"
             :disabled="isLoading"
           />
         </div>
 
         <div class="input-group">
-          <label for="sessionName">Session Name</label>
+          <label for="paSessionName">Session name</label>
           <input
-            id="sessionName"
+            id="paSessionName"
             v-model="sessionName"
             type="text"
             required
-            placeholder="Enter Session Name"
+            autocomplete="off"
+            placeholder="Session name from the researcher"
             :disabled="isLoading"
           />
         </div>
 
         <button type="submit" class="login-btn" :disabled="isLoading">
-          {{ isLoading ? 'Logging in...' : 'Login' }}
+          {{ isLoading ? 'Signing in…' : 'Continue to annotation' }}
         </button>
       </form>
 
@@ -42,11 +45,15 @@
       <div class="info-section">
         <h3>Instructions</h3>
         <ul>
-          <li>Enter your assigned Participant Name</li>
-          <li>Use Session Name provided by researcher</li>
-          <li>Once logged in, the session will start automatically</li>
-          <li>Contact the researcher if you have login issues</li>
+          <li>Use the participant name assigned for this session</li>
+          <li>Use the session name your researcher gave you</li>
+          <li>This page only opens the post-session annotation task (not the live session)</li>
+          <li>For the live experiment, use the main participant login instead</li>
         </ul>
+      </div>
+
+      <div class="footer-link">
+        <RouterLink to="/login">Go to participant session login</RouterLink>
       </div>
     </div>
   </div>
@@ -54,17 +61,15 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 
 const router = useRouter()
 
-// Reactive state
 const participantName = ref('')
-const sessionName = ref('')  // Empty by default - require user input
+const sessionName = ref('')
 const isLoading = ref(false)
 const errorMessage = ref('')
 
-// Handle form submission
 const handleLogin = async () => {
   if (!participantName.value.trim() || !sessionName.value.trim()) {
     errorMessage.value = 'Please enter both participant name and session name'
@@ -75,55 +80,43 @@ const handleLogin = async () => {
   errorMessage.value = ''
 
   try {
-    // Using sessionStorage for tab-specific authentication
-    // This allows multiple participants to login simultaneously in different tabs
     const response = await fetch('/api/auth/login', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         participant_name: participantName.value.trim(),
-        session_name: sessionName.value.trim()
-      })
+        session_name: sessionName.value.trim(),
+      }),
     })
 
     const data = await response.json()
 
     if (response.ok && data.success) {
-      // Store authentication data in sessionStorage (tab-specific)
-      sessionStorage.setItem('auth_token', data.token)
-      sessionStorage.setItem('participant_id', data.participant.participant_id || data.participant.id)
-      sessionStorage.setItem('session_code', data.session.session_code || data.session.session_name)
-      sessionStorage.setItem('session_id', data.session.session_id)
-      
-      // Store experiment type if available
+      const sid = data.session?.session_id
+      const pid = data.participant?.participant_id || data.participant?.id
+      if (!sid || !pid) {
+        errorMessage.value = 'Login succeeded but session or participant id is missing. Please contact the researcher.'
+        return
+      }
+
+      sessionStorage.setItem('session_id', sid)
+      sessionStorage.setItem('participant_id', pid)
+      if (data.session?.session_name || data.session?.session_code) {
+        sessionStorage.setItem(
+          'session_code',
+          data.session.session_code || data.session.session_name,
+        )
+      }
       if (data.session?.experiment_type) {
         sessionStorage.setItem('experiment_type', data.session.experiment_type)
       }
 
-      // Header role badge is Map Task only — do not persist role for other experiments (e.g. wordguessing)
-      if (data.session?.experiment_type === 'maptask') {
-        const pr = data.participant?.role
-        if (pr != null && String(pr).trim() !== '') {
-          sessionStorage.setItem('participant_role', String(pr).trim())
-        }
-      } else {
-        sessionStorage.removeItem('participant_role')
-      }
-      
-      // Store participant interface config for participant.vue to render dynamically
-      if (data.participant?.interface) {
-        sessionStorage.setItem('participant_interface', JSON.stringify(data.participant.interface))
-      }
-
-      // Redirect to participant interface (now adaptive)
-      router.push('/participant')
+      await router.push({ path: '/post-annotation' })
     } else {
-      errorMessage.value = data.message || 'Login failed. Please check your credentials.'
+      errorMessage.value = data.message || 'Sign-in failed. Check names and try again.'
     }
-  } catch (error) {
-    console.error('Login error:', error)
+  } catch (e) {
+    console.error('[PostAnnotationLogin]', e)
     errorMessage.value = 'Network error. Please check your connection and try again.'
   } finally {
     isLoading.value = false
@@ -134,19 +127,18 @@ const handleLogin = async () => {
 <style scoped>
 .login-container {
   box-sizing: border-box;
-  /* #app has padding: 1vh top+bottom (see style.css); 100vh + that caused page scroll */
   min-height: calc(100vh - 2vh);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #2d6a4f 0%, #1b4332 100%);
   padding: 16px;
 }
 
 .login-card {
   background: white;
   border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
   padding: 28px;
   max-width: 500px;
   width: 100%;
@@ -160,12 +152,14 @@ const handleLogin = async () => {
 .header h1 {
   color: #333;
   margin-bottom: 8px;
-  font-size: 28px;
+  font-size: 26px;
 }
 
 .subtitle {
   color: #666;
-  font-size: 16px;
+  font-size: 15px;
+  line-height: 1.45;
+  margin: 0;
 }
 
 .login-form {
@@ -195,7 +189,7 @@ const handleLogin = async () => {
 
 .input-group input:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: #2d6a4f;
 }
 
 .input-group input:disabled {
@@ -205,7 +199,7 @@ const handleLogin = async () => {
 
 .login-btn {
   width: 100%;
-  background: #667eea;
+  background: #2d6a4f;
   color: white;
   border: none;
   padding: 14px;
@@ -217,7 +211,7 @@ const handleLogin = async () => {
 }
 
 .login-btn:hover:not(:disabled) {
-  background: #5a6fd8;
+  background: #1b4332;
 }
 
 .login-btn:disabled {
@@ -237,7 +231,7 @@ const handleLogin = async () => {
 .info-section {
   border-top: 1px solid #e1e5e9;
   padding-top: 16px;
-  margin-bottom: 0;
+  margin-bottom: 16px;
 }
 
 .info-section h3 {
@@ -263,28 +257,25 @@ const handleLogin = async () => {
 }
 
 .info-section li:before {
-  content: "•";
-  color: #667eea;
+  content: '•';
+  color: #2d6a4f;
   font-weight: bold;
   position: absolute;
   left: 0;
 }
 
-.experiment-info {
-  background: #f8f9fa;
-  padding: 20px;
-  border-radius: 6px;
+.footer-link {
+  text-align: center;
+  padding-top: 4px;
 }
 
-.experiment-info h4 {
-  color: #333;
-  margin-bottom: 10px;
-  font-size: 16px;
+.footer-link a {
+  color: #2d6a4f;
+  font-weight: 600;
+  text-decoration: none;
 }
 
-.experiment-info p {
-  color: #666;
-  line-height: 1.5;
-  margin: 0;
+.footer-link a:hover {
+  text-decoration: underline;
 }
-</style> 
+</style>

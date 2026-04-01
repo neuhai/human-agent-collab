@@ -1,4 +1,6 @@
 <script setup>
+import { ref } from 'vue'
+
 const props = defineProps({
   tool: {
     type: String,
@@ -39,6 +41,30 @@ const onUndo = () => {
 const onEraserRadiusInput = (e) => {
   emit('update:eraserRadius', Number(e.target.value))
 }
+
+const TOOLTIPS = {
+  brush: 'Brush — draw on the map',
+  eraser: 'Eraser — remove ink',
+  undo: 'Undo last stroke',
+  reset: 'Reset — clear all drawing'
+}
+
+const activeTooltip = ref(null)
+const tooltipPosition = ref({ x: 0, y: 0 })
+
+const showTooltip = (key, event) => {
+  activeTooltip.value = key
+  tooltipPosition.value = { x: event.clientX + 12, y: event.clientY + 12 }
+}
+
+const moveTooltip = (event) => {
+  if (!activeTooltip.value) return
+  tooltipPosition.value = { x: event.clientX + 12, y: event.clientY + 12 }
+}
+
+const hideTooltip = () => {
+  activeTooltip.value = null
+}
 </script>
 
 <template>
@@ -46,21 +72,27 @@ const onEraserRadiusInput = (e) => {
     <button
       class="tool-btn"
       :class="{ active: tool === 'brush' }"
+      type="button"
+      aria-label="Brush"
+      @mouseenter="showTooltip('brush', $event)"
+      @mousemove="moveTooltip"
+      @mouseleave="hideTooltip"
       @click="setTool('brush')"
-      title="Brush"
     >
-      <i class="fa-solid fa-paintbrush"></i>
-      <span>Brush</span>
+      <i class="fa-solid fa-paintbrush" aria-hidden="true"></i>
     </button>
     <div class="tool-with-flyout">
       <button
         class="tool-btn"
         :class="{ active: tool === 'eraser' }"
+        type="button"
+        aria-label="Eraser"
+        @mouseenter="showTooltip('eraser', $event)"
+        @mousemove="moveTooltip"
+        @mouseleave="hideTooltip"
         @click="setTool('eraser')"
-        title="Eraser"
       >
-        <i class="fa-solid fa-eraser"></i>
-        <span>Eraser</span>
+        <i class="fa-solid fa-eraser" aria-hidden="true"></i>
       </button>
       <div
         v-if="tool === 'eraser'"
@@ -81,29 +113,54 @@ const onEraserRadiusInput = (e) => {
         <span class="eraser-size-label">Small</span>
       </div>
     </div>
-    <button
-      class="tool-btn"
-      :disabled="!canUndo"
-      title="Undo last stroke"
-      @click="onUndo"
+    <span
+      class="tool-tooltip-anchor"
+      @mouseenter="showTooltip('undo', $event)"
+      @mousemove="moveTooltip"
+      @mouseleave="hideTooltip"
     >
-      <i class="fa-solid fa-clock-rotate-left"></i>
-      <span>Undo</span>
+      <button
+        class="tool-btn"
+        type="button"
+        :disabled="!canUndo"
+        aria-label="Undo last stroke"
+        @click="onUndo"
+      >
+        <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+      </button>
+    </span>
+    <button
+      class="tool-btn reset-btn"
+      type="button"
+      aria-label="Reset"
+      @mouseenter="showTooltip('reset', $event)"
+      @mousemove="moveTooltip"
+      @mouseleave="hideTooltip"
+      @click="onReset"
+    >
+      <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
     </button>
-    <button class="tool-btn reset-btn" @click="onReset" title="Reset">
-      <i class="fa-solid fa-rotate-left"></i>
-      <span>Reset</span>
-    </button>
+    <Teleport to="body">
+      <div
+        v-if="activeTooltip"
+        class="map-toolbox-tooltip"
+        :style="{ left: tooltipPosition.x + 'px', top: tooltipPosition.y + 'px' }"
+      >
+        {{ TOOLTIPS[activeTooltip] }}
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
 .map-toolbox {
   display: flex;
+  flex-direction: column;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
+  gap: 6px;
+  padding: 6px;
+  width: fit-content;
   background: #f9fafb;
   border-radius: 6px;
   border: 1px solid #e5e7eb;
@@ -111,15 +168,18 @@ const onEraserRadiusInput = (e) => {
 
 .tool-with-flyout {
   position: relative;
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
   align-items: center;
 }
 
 .eraser-size-flyout {
   position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+  right: calc(100% + 8px);
+  left: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -137,13 +197,17 @@ const onEraserRadiusInput = (e) => {
 .tool-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   border: 1px solid #d1d5db;
   border-radius: 6px;
   background: white;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1;
   transition: all 0.2s;
 }
 
@@ -164,7 +228,9 @@ const onEraserRadiusInput = (e) => {
 }
 
 .reset-btn {
-  margin-left: auto;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
 }
 
 .eraser-size-label {
@@ -184,5 +250,28 @@ const onEraserRadiusInput = (e) => {
   direction: rtl;
   accent-color: #2563eb;
   cursor: pointer;
+}
+
+.tool-tooltip-anchor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+</style>
+
+<style>
+/* Teleport to body — unscoped so tooltip is not clipped by overflow */
+.map-toolbox-tooltip {
+  position: fixed;
+  z-index: 10050;
+  background: #1f2937;
+  color: #ffffff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  max-width: 260px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  line-height: 1.4;
 }
 </style>

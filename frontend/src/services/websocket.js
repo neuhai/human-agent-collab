@@ -312,6 +312,49 @@ export function offMessageReceived(callback) {
   }
 }
 
+/** Fire-and-forget typing indicator (participants must only emit when experiment enables it). */
+export function emitTypingIndicator(sessionId, sender, receiver, isTyping) {
+  const ws = getSocket()
+  if (!ws?.connected) return
+  ws.emit('typing_indicator', {
+    session_id: sessionId,
+    sender,
+    receiver: receiver ?? null,
+    is_typing: !!isTyping,
+  })
+}
+
+const typingIndicatorCallbacks = new Map()
+
+export function onTypingIndicator(callback) {
+  const ws = getSocket()
+  const wrapped = (payload) => {
+    try {
+      callback(payload)
+    } catch (error) {
+      console.error('[WebSocket] Error in typing_indicator callback:', error)
+    }
+  }
+  typingIndicatorCallbacks.set(callback, wrapped)
+  ws.on('typing_indicator', wrapped)
+  return () => {
+    const w = typingIndicatorCallbacks.get(callback)
+    if (w && ws) {
+      ws.off('typing_indicator', w)
+      typingIndicatorCallbacks.delete(callback)
+    }
+  }
+}
+
+export function offTypingIndicator(callback) {
+  if (!socket?.connected) return
+  const w = typingIndicatorCallbacks.get(callback)
+  if (w) {
+    socket.off('typing_indicator', w)
+    typingIndicatorCallbacks.delete(callback)
+  }
+}
+
 // Export socket for direct access if needed
 export { socket }
 
