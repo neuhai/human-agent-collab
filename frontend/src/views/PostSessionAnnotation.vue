@@ -233,14 +233,15 @@ function getActionTagLabel(entry) {
     .join(' ')
 }
 
+/** Elapsed MM:SS from session start (same anchor as interaction log). Negative diff clamped to 0 (clock skew). */
 function formatTime(ts) {
   if (!ts) return '00:00'
   try {
     const d = new Date(ts)
     if (sessionStartTime.value) {
-      const diff = d.getTime() - sessionStartTime.value.getTime()
-      if (diff < 0) return '00:00'
-      const totalSeconds = Math.floor(diff / 1000)
+      const startMs = sessionStartTime.value.getTime()
+      const diff = d.getTime() - startMs
+      const totalSeconds = Math.max(0, Math.floor(diff / 1000))
       const m = Math.floor(totalSeconds / 60)
       const s = totalSeconds % 60
       return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
@@ -250,36 +251,6 @@ function formatTime(ts) {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   } catch {
     return '00:00'
-  }
-}
-
-/**
- * Label time for in-session checkpoint transcription: same MM:SS-from-session-start as the action log when possible.
- * If session start and DB time are inconsistent (diff < 0), show wall-clock submission time instead of 00:00.
- */
-function formatInSessionAnnotationTimeLabel(ts) {
-  if (!ts || !String(ts).trim()) return '—'
-  try {
-    const d = new Date(ts)
-    const at = d.getTime()
-    if (!Number.isFinite(at)) return '—'
-    if (sessionStartTime.value) {
-      const diff = at - sessionStartTime.value.getTime()
-      if (diff >= 0) {
-        const totalSeconds = Math.floor(diff / 1000)
-        const m = Math.floor(totalSeconds / 60)
-        const s = totalSeconds % 60
-        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-      }
-    }
-    return d.toLocaleTimeString(undefined, {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
-  } catch {
-    return '—'
   }
 }
 
@@ -347,7 +318,7 @@ const selectedInSessionThought = computed(() => {
   if (!match?.transcription?.trim()) {
     return { transcription: '(No in-session annotation recorded for this period.)', timeLabel: '—' }
   }
-  const timeLabel = match.created_at ? formatInSessionAnnotationTimeLabel(match.created_at) : '—'
+  const timeLabel = match.created_at ? formatTime(match.created_at) : '—'
   return { transcription: match.transcription.trim(), timeLabel }
 })
 
