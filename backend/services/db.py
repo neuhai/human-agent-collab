@@ -166,8 +166,11 @@ def _pg_connect_args(database_url: str) -> Dict[str, str]:
     """
     args: Dict[str, str] = {'gssencmode': 'disable'}
     ul = database_url.lower()
-    # export_session_data + SSH -L to Docker Postgres; .env may still say sslmode=require for RDS.
-    if (os.environ.get('EXPORT_PG_TUNNEL_PORT') or '').strip():
+    # EXPORT_PG_TUNNEL_PORT must not force sslmode=disable when DATABASE_URL points at RDS/cloud:
+    # that produces "no pg_hba.conf entry ... no encryption". Only apply with loopback tunnel.
+    if (os.environ.get('EXPORT_PG_TUNNEL_PORT') or '').strip() and _db_url_host_is_loopback(
+        database_url
+    ):
         args['sslmode'] = 'disable'
     elif _db_url_host_is_loopback(database_url):
         if not any(
