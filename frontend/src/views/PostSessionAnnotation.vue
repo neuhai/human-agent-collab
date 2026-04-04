@@ -12,7 +12,6 @@ const mergedLogs = ref([])
 const annotationMoments = ref([])
 const participantNames = ref({})
 const filesBase = ref('')
-const savedAnnotationAssetUrls = ref({})
 const loading = ref(true)
 const error = ref('')
 
@@ -91,13 +90,14 @@ const currentSection = computed(() => SECTIONS[stepIndex.value] || null)
 const annotations = ref({})
 const selectedLabelId = ref('')
 const transcriptText = ref('')
+/** Free text for the "Other" choice only; separate from explanation transcript */
+const otherLabelText = ref('')
 /** After at least one successful record+transcribe on this step; also true when reloading saved transcript */
 const transcriptUiShown = ref(false)
 const q4Value = ref(null)
 const q4Reasons = ref([])
 /** Free text when Q4 "Other" reason is selected */
 const q4OtherText = ref('')
-const showSameAsLastConfirm = ref(false)
 
 const isQ4Step = computed(() => currentSection.value?.kind === 'yes_no_reasons')
 const isLabelQuestionStep = computed(
@@ -141,6 +141,61 @@ const displayMergedLogs = computed(() => {
   }
   return rows
 })
+
+/** action_id → index in annotationMoments (only rows that are annotatable moments) */
+const momentIndexByActionId = computed(() => {
+  const map = new Map()
+  annotationMoments.value.forEach((mom, i) => {
+    if (mom?.action_id) map.set(mom.action_id, i)
+  })
+  return map
+})
+
+function getMomentIndexForLogEntry(entry) {
+  if (!entry?.action_id) return -1
+  return momentIndexByActionId.value.get(entry.action_id) ?? -1
+}
+
+function logEntryParticipantIsYou(entry) {
+  if (!entry?.participant_id || !participantId.value) return false
+  return String(entry.participant_id) === String(participantId.value)
+}
+
+/** True if merged log row has a screenshot we can show (path or URL). */
+function logEntryHasScreenshot(entry) {
+  if (!entry?.screenshot) return false
+  const s = String(entry.screenshot).trim()
+  if (!s) return false
+  if (s.startsWith('http://') || s.startsWith('https://')) return true
+  if (s.startsWith('s3://')) return true
+  return !!filesBase.value
+}
+
+const screenshotNavEntries = computed(() => displayMergedLogs.value.filter((e) => logEntryHasScreenshot(e)))
+
+const screenshotCarouselIndex = ref(0)
+
+const screenshotDisplayEntry = computed(() => {
+  const list = screenshotNavEntries.value
+  if (!list.length) return currentMoment.value
+  const i = Math.min(Math.max(0, screenshotCarouselIndex.value), list.length - 1)
+  return list[i]
+})
+
+/** Right-side annotation UI only when the screenshot panel shows your current annotation moment. */
+const showAnnotationPanel = computed(() => {
+  const e = screenshotDisplayEntry.value
+  const cm = currentMoment.value
+  return !!(e && cm && e.action_id === cm.action_id && getMomentIndexForLogEntry(e) >= 0)
+})
+
+function syncCarouselToCurrentMoment() {
+  const cm = currentMoment.value
+  if (!cm?.action_id) return
+  const list = screenshotNavEntries.value
+  const i = list.findIndex((e) => e.action_id === cm.action_id)
+  if (i >= 0) screenshotCarouselIndex.value = i
+}
 
 /** Stable key for tag styling + i18n-style labels in the interaction log */
 const ACTION_TAG_LABELS = {
@@ -208,21 +263,32 @@ function getDisplayName(entry, isYou = false) {
   return isYou ? `${name} (you)` : name
 }
 
-const screenshotUrl = computed(() => {
-  const m = currentMoment.value
-  if (!m) return null
-  const aid = m.action_id
-  const apiUrls = savedAnnotationAssetUrls.value[aid]
-  if (apiUrls?.screenshot_s3) return apiUrls.screenshot_s3
-  const saved = annotations.value[aid]
-  if (saved?.screenshot_s3?.startsWith('http')) return saved.screenshot_s3
-  const s = m.screenshot
-  if (!s) return null
+/** Session-time screenshot only (from merged_logs); not post_annotation uploads. */
+function getScreenshotUrlForLogEntry(entry) {
+  if (!entry?.action_id) return null
+  const sessionShot = entry.screenshot
+  if (!sessionShot || !String(sessionShot).trim()) return null
+  const s = String(sessionShot).trim()
   if (s.startsWith('http://') || s.startsWith('https://')) return s
   if (!filesBase.value) return null
   const filename = s.startsWith('files/') ? s.slice(6) : s
   return `${filesBase.value}/${filename}`
-})
+}
+
+function annotationsPayloadForSave(raw) {
+  const out = {}
+  for (const [k, v] of Object.entries(raw || {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const { screenshot_s3, ...rest } = v
+      out[k] = rest
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+const screenshotUrl = computed(() => getScreenshotUrlForLogEntry(screenshotDisplayEntry.value))
 
 function bucketIndexFromProgressPct(pct) {
   if (pct < 33) return 0
@@ -295,6 +361,7 @@ const prevAnswerForStep = computed(() => {
     text,
     labelId: prev[`${sec.id}LabelId`] || '',
     transcript: prev[`${sec.id}Transcript`] || '',
+    otherText: (prev[`${sec.id}OtherText`] || '').trim(),
     isQ4: false,
   }
 })
@@ -314,10 +381,12 @@ const canConfirmCurrentStep = computed(() => {
     }
     return true
   }
-  return !!selectedLabelId.value && !!transcriptText.value.trim()
+  if (!selectedLabelId.value || !transcriptText.value.trim()) return false
+  if (selectedLabelId.value === 'other' && !otherLabelText.value.trim()) return false
+  return true
 })
 
-const canRecordExplanation = computed(() => !!selectedLabelId.value && selectedLabelId.value !== 'other')
+const canRecordExplanation = computed(() => !!selectedLabelId.value)
 const canRecordOtherLabel = computed(
   () => isLabelQuestionStep.value && selectedLabelId.value === 'other',
 )
@@ -336,6 +405,9 @@ function getLabelText(sectionId, labelId) {
 
 function selectLabel(labelId) {
   if (selectedLabelId.value !== labelId) {
+    if (selectedLabelId.value === 'other' && labelId !== 'other') {
+      otherLabelText.value = ''
+    }
     selectedLabelId.value = labelId
     if (labelId !== 'other') {
       transcriptText.value = ''
@@ -361,12 +433,24 @@ function loadStepStateFromSaved() {
   }
   const savedLabelId = saved[`${sec.id}LabelId`] || ''
   const savedText = (saved[sec.id] || '').trim()
+  const otKey = `${sec.id}OtherText`
   selectedLabelId.value = savedLabelId
   transcriptText.value = saved[`${sec.id}Transcript`] || ''
-  transcriptUiShown.value = !!transcriptText.value.trim() && savedLabelId !== 'other'
+  otherLabelText.value = typeof saved[otKey] === 'string' ? saved[otKey] : ''
+  transcriptUiShown.value = !!transcriptText.value.trim()
   if (!selectedLabelId.value && savedText && sec.labels) {
     const byText = sec.labels.find((x) => x.text === savedText)
     if (byText) selectedLabelId.value = byText.id
+  }
+  if (
+    selectedLabelId.value === 'other' &&
+    !otherLabelText.value.trim() &&
+    transcriptText.value.trim() &&
+    !(saved[otKey] || '').toString().trim()
+  ) {
+    otherLabelText.value = transcriptText.value
+    transcriptText.value = ''
+    transcriptUiShown.value = false
   }
 }
 
@@ -379,11 +463,11 @@ function loadCurrentMomentState() {
   stepIndex.value = 0
   selectedLabelId.value = ''
   transcriptText.value = ''
+  otherLabelText.value = ''
   transcriptUiShown.value = false
   q4Value.value = null
   q4Reasons.value = []
   q4OtherText.value = ''
-  showSameAsLastConfirm.value = false
   loadStepStateFromSaved()
 }
 
@@ -412,10 +496,12 @@ function saveCurrentStepAnnotation() {
     return
   }
   const labelText = getLabelText(sec.id, selectedLabelId.value)
+  const otKey = `${sec.id}OtherText`
   annotations.value[m.action_id] = {
     ...prev,
     [sec.id]: labelText,
     [`${sec.id}LabelId`]: selectedLabelId.value,
+    [otKey]: selectedLabelId.value === 'other' ? otherLabelText.value.trim() : '',
     [`${sec.id}Transcript`]: transcriptText.value.trim(),
   }
 }
@@ -430,6 +516,16 @@ function moveToNextStepOrMoment() {
     stepIndex.value = 0
     return
   }
+  if (!allAnnotationMomentsComplete()) {
+    const n = annotationMoments.value.filter(
+      (mom) => !isMomentAnnotationComplete(annotations.value[mom.action_id] || {}),
+    ).length
+    alert(
+      `Please annotate all of your actions before finishing. ${n} moment(s) still have incomplete answers. You will be taken to the first incomplete moment.`,
+    )
+    focusFirstIncompleteMoment()
+    return
+  }
   annotationFinished.value = true
 }
 
@@ -441,44 +537,27 @@ async function confirmCurrentStep() {
   moveToNextStepOrMoment()
 }
 
-function requestSameAsLastMoment() {
-  showSameAsLastConfirm.value = true
-}
-
-async function applySameAsLastMoment() {
+/** Fill current step UI from previous moment's saved answer for this question (user can edit, then Confirm). */
+function applySameAsLastMomentToForm() {
   const prev = prevAnswerForStep.value
   const sec = currentSection.value
-  const m = currentMoment.value
-  if (!prev || !sec || !m) {
-    showSameAsLastConfirm.value = false
+  if (!prev || !sec) return
+  if (sec.kind === 'yes_no_reasons') {
+    const yes = prev.text === 'Yes'
+    q4Value.value = yes ? 'yes' : 'no'
+    if (yes) {
+      q4Reasons.value = []
+      q4OtherText.value = ''
+    } else {
+      q4Reasons.value = [...(prev.q4Reasons || [])]
+      q4OtherText.value = prev.q4OtherText || ''
+    }
     return
   }
-  const prevSaved = annotations.value[m.action_id] || {}
-  if (sec.kind === 'yes_no_reasons' && prev.isQ4) {
-    annotations.value[m.action_id] = {
-      ...prevSaved,
-      q4: prev.text === 'Yes' ? 'yes' : 'no',
-      q4Reasons: [...(prev.q4Reasons || [])],
-      q4OtherText: prev.q4OtherText || '',
-    }
-    q4Value.value = annotations.value[m.action_id].q4
-    q4Reasons.value = [...(annotations.value[m.action_id].q4Reasons || [])]
-    q4OtherText.value = annotations.value[m.action_id].q4OtherText || ''
-  } else {
-    annotations.value[m.action_id] = {
-      ...prevSaved,
-      [sec.id]: prev.text,
-      [`${sec.id}LabelId`]: prev.labelId,
-      [`${sec.id}Transcript`]: prev.transcript,
-    }
-    selectedLabelId.value = prev.labelId || ''
-    transcriptText.value = prev.transcript || ''
-    transcriptUiShown.value = !!transcriptText.value.trim()
-  }
-  showSameAsLastConfirm.value = false
-  const ok = await saveAnnotationsToFile()
-  if (!ok) return
-  moveToNextStepOrMoment()
+  selectedLabelId.value = prev.labelId || ''
+  otherLabelText.value = prev.otherText || ''
+  transcriptText.value = prev.transcript || ''
+  transcriptUiShown.value = !!transcriptText.value.trim()
 }
 
 function loadData() {
@@ -503,14 +582,13 @@ function loadData() {
       sessionName.value = data.session_name || data.session_id || ''
       experimentType.value =
         data.experiment_type || (Array.isArray(data.merged_logs) && data.merged_logs[0]?.experiment_type) || ''
-      savedAnnotationAssetUrls.value = data.saved_annotation_asset_urls || {}
       inSessionAnnotations.value = data.in_session_annotations || []
       sessionDurationSeconds.value =
         data.session_duration_seconds != null && data.session_duration_seconds !== ''
           ? Number(data.session_duration_seconds)
           : null
       if (data.saved_annotations && typeof data.saved_annotations === 'object') {
-        annotations.value = { ...data.saved_annotations }
+        annotations.value = annotationsPayloadForSave(data.saved_annotations)
       }
       if (data.session_started_at) {
         sessionStartTime.value = new Date(data.session_started_at)
@@ -523,6 +601,7 @@ function loadData() {
       stepIndex.value = 0
       annotationFinished.value = false
       loadCurrentMomentState()
+      syncCarouselToCurrentMoment()
     })
     .catch((err) => {
       error.value = err.message || 'Failed to load annotation data'
@@ -530,91 +609,6 @@ function loadData() {
     .finally(() => {
       loading.value = false
     })
-}
-
-async function fetchPostAnnotationPresign(actionId, asset, contentType) {
-  const encSid = encodeURIComponent(sessionId.value)
-  const encPid = encodeURIComponent(participantId.value)
-  const res = await fetch(`/api/sessions/${encSid}/participants/${encPid}/post_annotation_presign`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action_id: actionId, asset, content_type: contentType }),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || 'presign failed')
-  return data
-}
-
-async function uploadCurrentMomentScreenshotToS3IfNeeded() {
-  const m = currentMoment.value
-  if (!m?.action_id) return
-  const aid = m.action_id
-  const row = annotations.value[aid]
-  if (row?.screenshot_s3) return
-
-  let pres
-  try {
-    pres = await fetchPostAnnotationPresign(aid, 'screenshot', 'image/jpeg')
-  } catch (e) {
-    console.warn('[PostAnnotation] presign screenshot skipped:', e)
-    return
-  }
-  if (!pres?.upload_url) return
-
-  const img = document.querySelector('.replay-screenshot')
-  if (img && img.complete && img.naturalWidth) {
-    try {
-      const canvas = document.createElement('canvas')
-      canvas.width = img.naturalWidth
-      canvas.height = img.naturalHeight
-      const ctx = canvas.getContext('2d')
-      ctx.drawImage(img, 0, 0)
-      const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.88))
-      if (blob) {
-        const put = await fetch(pres.upload_url, {
-          method: 'PUT',
-          body: blob,
-          headers: { 'Content-Type': 'image/jpeg' },
-        })
-        if (!put.ok) throw new Error('S3 PUT failed')
-        const prev = annotations.value[aid] || {}
-        annotations.value[aid] = { ...prev, screenshot_s3: pres.s3_uri }
-        if (pres.view_url) {
-          savedAnnotationAssetUrls.value = {
-            ...savedAnnotationAssetUrls.value,
-            [aid]: { ...(savedAnnotationAssetUrls.value[aid] || {}), screenshot_s3: pres.view_url },
-          }
-        }
-        return
-      }
-    } catch (e) {
-      console.warn('[PostAnnotation] canvas from replay img failed:', e)
-    }
-  }
-
-  try {
-    const html2canvas = (await import('html2canvas')).default
-    const el = document.getElementById('app') || document.body
-    const canvas = await html2canvas(el, { useCORS: true, allowTaint: true, scale: 1, logging: false })
-    const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', 0.88))
-    if (!blob) return
-    const put = await fetch(pres.upload_url, {
-      method: 'PUT',
-      body: blob,
-      headers: { 'Content-Type': 'image/jpeg' },
-    })
-    if (!put.ok) throw new Error('S3 PUT failed')
-    const prev = annotations.value[aid] || {}
-    annotations.value[aid] = { ...prev, screenshot_s3: pres.s3_uri }
-    if (pres.view_url) {
-      savedAnnotationAssetUrls.value = {
-        ...savedAnnotationAssetUrls.value,
-        [aid]: { ...(savedAnnotationAssetUrls.value[aid] || {}), screenshot_s3: pres.view_url },
-      }
-    }
-  } catch (e) {
-    console.warn('[PostAnnotation] html2canvas fallback failed:', e)
-  }
 }
 
 /** Returns true if saved (or nothing to save); false if the server rejected the save. */
@@ -626,7 +620,7 @@ async function saveAnnotationsToFile() {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ annotations: annotations.value }),
+        body: JSON.stringify({ annotations: annotationsPayloadForSave(annotations.value) }),
       }
     )
     const data = await res.json().catch(() => ({}))
@@ -654,22 +648,108 @@ async function prevMoment() {
   }
 }
 
+function isSectionCompleteForSaved(saved, sec) {
+  if (sec.kind === 'yes_no_reasons') {
+    if (!saved.q4 || (saved.q4 !== 'yes' && saved.q4 !== 'no')) return false
+    if (saved.q4 === 'no' && !(saved.q4Reasons || []).length) return false
+    const reasons = saved.q4Reasons || []
+    if (saved.q4 === 'no' && reasons.includes(Q4_REASON_OTHER) && !(saved.q4OtherText || '').trim()) {
+      return false
+    }
+    return true
+  }
+  const label = (saved[`${sec.id}LabelId`] || '').trim()
+  const transcript = (saved[`${sec.id}Transcript`] || '').trim()
+  if (!label || !transcript) return false
+  if (label === 'other' && !(saved[`${sec.id}OtherText`] || '').trim()) return false
+  return true
+}
+
 function isMomentAnnotationComplete(saved) {
   for (const s of SECTIONS) {
-    if (s.kind === 'yes_no_reasons') {
-      if (!saved.q4 || (saved.q4 !== 'yes' && saved.q4 !== 'no')) return false
-      if (saved.q4 === 'no' && !(saved.q4Reasons || []).length) return false
-      const reasons = saved.q4Reasons || []
-      if (saved.q4 === 'no' && reasons.includes(Q4_REASON_OTHER) && !(saved.q4OtherText || '').trim()) {
-        return false
-      }
-    } else {
-      const label = (saved[`${s.id}LabelId`] || '').trim()
-      const transcript = (saved[`${s.id}Transcript`] || '').trim()
-      if (!label || !transcript) return false
-    }
+    if (!isSectionCompleteForSaved(saved, s)) return false
   }
   return true
+}
+
+function firstIncompleteStepIndexForSaved(saved) {
+  for (let i = 0; i < SECTIONS.length; i++) {
+    if (!isSectionCompleteForSaved(saved, SECTIONS[i])) return i
+  }
+  return SECTIONS.length - 1
+}
+
+function isLogEntryFullyAnnotated(entry) {
+  const idx = getMomentIndexForLogEntry(entry)
+  if (idx < 0) return false
+  const aid = annotationMoments.value[idx]?.action_id
+  if (!aid) return false
+  return isMomentAnnotationComplete(annotations.value[aid] || {})
+}
+
+function allAnnotationMomentsComplete() {
+  return annotationMoments.value.every((mom) =>
+    isMomentAnnotationComplete(annotations.value[mom.action_id] || {}),
+  )
+}
+
+function focusFirstIncompleteMoment() {
+  for (let mi = 0; mi < annotationMoments.value.length; mi++) {
+    const aid = annotationMoments.value[mi]?.action_id
+    if (!aid) continue
+    const saved = annotations.value[aid] || {}
+    if (!isMomentAnnotationComplete(saved)) {
+      currentMomentIndex.value = mi
+      stepIndex.value = firstIncompleteStepIndexForSaved(saved)
+      syncCarouselToCurrentMoment()
+      return true
+    }
+  }
+  return false
+}
+
+function logEntryIsInteractive(entry) {
+  if (getMomentIndexForLogEntry(entry) >= 0) return true
+  return logEntryHasScreenshot(entry)
+}
+
+async function onInteractionLogEntryClick(entry) {
+  const navIdx = screenshotNavEntries.value.findIndex((e) => e.action_id === entry.action_id)
+  const ownMi = getMomentIndexForLogEntry(entry)
+  if (ownMi < 0 && navIdx < 0) return
+
+  saveCurrentStepAnnotation()
+  const ok = await saveAnnotationsToFile()
+  if (!ok) return
+
+  if (ownMi >= 0) {
+    currentMomentIndex.value = ownMi
+    const aid = annotationMoments.value[ownMi]?.action_id
+    stepIndex.value = firstIncompleteStepIndexForSaved(annotations.value[aid] || {})
+  }
+
+  if (navIdx >= 0) {
+    screenshotCarouselIndex.value = navIdx
+  } else if (ownMi >= 0) {
+    syncCarouselToCurrentMoment()
+  }
+}
+
+async function screenshotNavDelta(delta) {
+  const list = screenshotNavEntries.value
+  if (!list.length) return
+  const next = Math.min(list.length - 1, Math.max(0, screenshotCarouselIndex.value + delta))
+  if (next === screenshotCarouselIndex.value) return
+  const entry = list[next]
+  saveCurrentStepAnnotation()
+  const ok = await saveAnnotationsToFile()
+  if (!ok) return
+  screenshotCarouselIndex.value = next
+  const mi = getMomentIndexForLogEntry(entry)
+  if (mi >= 0) {
+    currentMomentIndex.value = mi
+    stepIndex.value = firstIncompleteStepIndexForSaved(annotations.value[entry.action_id] || {})
+  }
 }
 
 async function nextMoment() {
@@ -686,6 +766,16 @@ async function nextMoment() {
     currentMomentIndex.value++
     stepIndex.value = 0
   } else {
+    if (!allAnnotationMomentsComplete()) {
+      const n = annotationMoments.value.filter(
+        (mom) => !isMomentAnnotationComplete(annotations.value[mom.action_id] || {}),
+      ).length
+      alert(
+        `Please annotate all of your actions before finishing. ${n} moment(s) still have incomplete answers. You will be taken to the first incomplete moment.`,
+      )
+      focusFirstIncompleteMoment()
+      return
+    }
     annotationFinished.value = true
   }
 }
@@ -721,7 +811,7 @@ async function toggleRecording(target) {
         if (target === 'q4_other') {
           q4OtherText.value = text
         } else if (target === 'other_label') {
-          transcriptText.value = text
+          otherLabelText.value = text
         } else if (target === currentSection.value?.id) {
           transcriptText.value = text
           transcriptUiShown.value = true
@@ -768,11 +858,14 @@ function toggleQ4Reason(reason) {
   }
 }
 
+watch(currentMomentIndex, () => {
+  syncCarouselToCurrentMoment()
+})
+
 onMounted(() => {
   if (route.query.session_id) sessionId.value = route.query.session_id
   if (route.query.participant_id) participantId.value = route.query.participant_id
   loadData()
-  uploadCurrentMomentScreenshotToS3IfNeeded().catch(() => {})
 })
 </script>
 
@@ -803,18 +896,45 @@ onMounted(() => {
     <div v-else class="annotation-layout">
       <div class="left-panel">
         <h2 class="panel-title">
-          You are revisiting your action at
-          <span class="time-highlight">{{ currentMoment ? formatTime(currentMoment.timestamp) : '00:00' }}</span>
+          <template v-if="screenshotDisplayEntry && logEntryParticipantIsYou(screenshotDisplayEntry)">
+            You are revisiting your action at
+            <span class="time-highlight">{{ formatTime(screenshotDisplayEntry.timestamp) }}</span>
+          </template>
+          <template v-else-if="screenshotDisplayEntry">
+            <span class="partner-preview-label">{{ getDisplayName(screenshotDisplayEntry, false) }}</span>'s action at
+            <span class="time-highlight">{{ formatTime(screenshotDisplayEntry.timestamp) }}</span>
+          </template>
+          <template v-else> Session replay </template>
         </h2>
 
         <div class="session-replay-preview">
-          <img
-            v-if="screenshotUrl"
-            :src="screenshotUrl"
-            alt="Session replay at action time"
-            class="replay-screenshot"
-          />
-          <div v-else class="replay-placeholder">No screenshot</div>
+          <button
+            type="button"
+            class="screenshot-nav-btn screenshot-nav-btn--prev"
+            :disabled="screenshotNavEntries.length <= 1 || screenshotCarouselIndex <= 0"
+            aria-label="Previous screenshot"
+            @click="screenshotNavDelta(-1)"
+          >
+            <i class="fa-solid fa-chevron-left"></i>
+          </button>
+          <div class="session-replay-preview__frame">
+            <img
+              v-if="screenshotUrl"
+              :src="screenshotUrl"
+              alt="Session replay at action time"
+              class="replay-screenshot"
+            />
+            <div v-else class="replay-placeholder">No screenshot</div>
+          </div>
+          <button
+            type="button"
+            class="screenshot-nav-btn screenshot-nav-btn--next"
+            :disabled="screenshotNavEntries.length <= 1 || screenshotCarouselIndex >= screenshotNavEntries.length - 1"
+            aria-label="Next screenshot"
+            @click="screenshotNavDelta(1)"
+          >
+            <i class="fa-solid fa-chevron-right"></i>
+          </button>
         </div>
 
         <div class="log-list-header">Interaction Log</div>
@@ -823,9 +943,42 @@ onMounted(() => {
             v-for="entry in displayMergedLogs"
             :key="entry.action_id"
             class="log-item"
-            :class="{ highlighted: currentMoment && entry.action_id === currentMoment.action_id }"
+            :class="{
+              'log-item--screenshot-active':
+                screenshotDisplayEntry && entry.action_id === screenshotDisplayEntry.action_id,
+              'log-item--annotation-target':
+                currentMoment && entry.action_id === currentMoment.action_id,
+              'log-item--clickable': logEntryIsInteractive(entry),
+              'log-item--annotated': isLogEntryFullyAnnotated(entry),
+            }"
+            :tabindex="logEntryIsInteractive(entry) ? 0 : undefined"
+            :title="
+              logEntryIsInteractive(entry)
+                ? getMomentIndexForLogEntry(entry) >= 0
+                  ? 'Jump to your annotation for this action'
+                  : 'View this action screenshot (partner)'
+                : undefined
+            "
+            :role="logEntryIsInteractive(entry) ? 'button' : undefined"
+            :aria-label="
+              logEntryIsInteractive(entry)
+                ? (getMomentIndexForLogEntry(entry) >= 0
+                    ? 'Your action at ' + formatTime(entry.timestamp)
+                    : 'Partner action at ' + formatTime(entry.timestamp))
+                : undefined
+            "
+            @click="onInteractionLogEntryClick(entry)"
+            @keydown.enter.prevent="onInteractionLogEntryClick(entry)"
+            @keydown.space.prevent="onInteractionLogEntryClick(entry)"
           >
-            <span class="log-time">{{ formatTime(entry.timestamp) }}</span>
+            <span class="log-time">
+              <span
+                v-if="isLogEntryFullyAnnotated(entry)"
+                class="log-annotated-indicator"
+                title="All questions answered for this action"
+              >✓</span>
+              {{ formatTime(entry.timestamp) }}
+            </span>
             <span class="log-participant">{{ getDisplayName(entry, entry.participant_id === participantId) }}</span>
             <span
               class="log-type-tag"
@@ -837,6 +990,7 @@ onMounted(() => {
       </div>
 
       <div class="right-panel">
+        <template v-if="showAnnotationPanel">
         <h2 class="panel-title">
           You are annotating your action at
           <span class="time-highlight">{{ currentMoment ? formatTime(currentMoment.timestamp) : '00:00' }}</span>
@@ -862,32 +1016,6 @@ onMounted(() => {
           <label>{{ currentSection.question }}</label>
           <p v-if="currentSection.hint" class="question-note">{{ currentSection.hint }}</p>
 
-          <div v-if="prevAnswerForStep" class="previous-answer-panel">
-            <div class="previous-title">Last moment annotation</div>
-            <div class="previous-label">{{ prevAnswerForStep.text }}</div>
-            <div
-              v-if="prevAnswerForStep.isQ4 && prevAnswerForStep.q4Reasons?.length"
-              class="previous-transcript"
-            >
-              <span>Reasons</span>
-              <p>{{ prevAnswerForStep.q4Reasons.join('; ') }}</p>
-            </div>
-            <div
-              v-if="prevAnswerForStep.isQ4 && prevAnswerForStep.q4OtherText"
-              class="previous-transcript"
-            >
-              <span>Other (specified)</span>
-              <p>{{ prevAnswerForStep.q4OtherText }}</p>
-            </div>
-            <div
-              v-if="!prevAnswerForStep.isQ4 && prevAnswerForStep.transcript"
-              class="previous-transcript"
-            >
-              <span>Transcription</span>
-              <p>{{ prevAnswerForStep.transcript }}</p>
-            </div>
-          </div>
-
           <template v-if="isLabelQuestionStep && currentSection.labels">
             <div
               v-for="label in currentSection.labels"
@@ -904,7 +1032,7 @@ onMounted(() => {
                 @click.stop
               >
                 <input
-                  v-model="transcriptText"
+                  v-model="otherLabelText"
                   type="text"
                   class="other-inline-input"
                   placeholder="Please specify"
@@ -922,7 +1050,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <div v-if="selectedLabelId !== 'other'" class="recording-row">
+            <div v-if="selectedLabelId" class="recording-row">
               <button
                 type="button"
                 class="btn-record"
@@ -942,21 +1070,24 @@ onMounted(() => {
               </button>
             </div>
 
-            <div v-if="isTranscribing && canRecordExplanation" class="transcribing-hint">
-              Transcribing…
-            </div>
-
-            <div v-if="isTranscribing && canRecordOtherLabel" class="transcribing-hint">
+            <div
+              v-if="
+                isTranscribing &&
+                (recordingTarget === 'other_label' ||
+                  (currentSection && recordingTarget === currentSection.id))
+              "
+              class="transcribing-hint"
+            >
               Transcribing…
             </div>
 
             <div v-if="transcriptUiShown" class="transcription-box">
-              <span>Transcription (editable)</span>
+              <span>Explanation (editable)</span>
               <textarea
                 v-model="transcriptText"
                 class="transcription-input"
-                rows="4"
-                placeholder="Edit your transcription if needed."
+                rows="2"
+                placeholder="Edit your explanation transcription if needed."
               ></textarea>
             </div>
           </template>
@@ -1006,7 +1137,7 @@ onMounted(() => {
               <textarea
                 v-model="q4OtherText"
                 class="transcription-input q4-other-textarea"
-                rows="3"
+                rows="2"
                 placeholder="Type your other reason here."
               ></textarea>
             </div>
@@ -1017,7 +1148,7 @@ onMounted(() => {
               v-if="prevAnswerForStep"
               type="button"
               class="btn-same"
-              @click="requestSameAsLastMoment"
+              @click="applySameAsLastMomentToForm"
             >
               Same as last moment
             </button>
@@ -1049,19 +1180,19 @@ onMounted(() => {
             Skip to next moment
           </button>
         </div>
-      </div>
-    </div>
+        </template>
 
-    <div v-if="showSameAsLastConfirm" class="confirm-overlay" @click.self="showSameAsLastConfirm = false">
-      <div class="confirm-modal">
-        <h3>Confirm "Same as last moment"</h3>
-        <p>This will copy your answers from the previous moment for this question (including labels, transcription, or Yes/No and reasons).</p>
-        <div class="confirm-actions">
-          <button type="button" class="btn-cancel" @click="showSameAsLastConfirm = false">Cancel</button>
-          <button type="button" class="btn-apply" @click="applySameAsLastMoment">Confirm</button>
+        <div v-else class="right-panel-preview-placeholder">
+          <p class="preview-placeholder-body">
+            You are looking at your partner's action.
+          </p>
+          <button type="button" class="btn-back-annotation btn-back-annotation--block" @click="syncCarouselToCurrentMoment">
+            Back to my current annotation
+          </button>
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -1141,7 +1272,6 @@ onMounted(() => {
   display: grid;
   grid-template-columns: 1.5fr 1fr;
   gap: 24px;
-  max-width: 1400px;
   margin: 0 auto;
   width: 100%;
   flex: 1;
@@ -1159,7 +1289,7 @@ onMounted(() => {
 .right-panel {
   background: white;
   border-radius: 12px;
-  padding: 24px;
+  padding: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   overflow: hidden;
   display: flex;
@@ -1190,13 +1320,90 @@ onMounted(() => {
 
 .session-replay-preview {
   width: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.session-replay-preview__frame {
+  flex: 1;
+  min-width: 0;
   max-height: 400px;
   aspect-ratio: 16/10;
   background: #eee;
   border-radius: 8px;
   overflow: hidden;
-  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screenshot-nav-btn {
   flex-shrink: 0;
+  align-self: center;
+  width: 40px;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.screenshot-nav-btn:hover:not(:disabled) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.screenshot-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-back-annotation {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #6366f1;
+  background: #eef2ff;
+  color: #3730a3;
+  cursor: pointer;
+}
+
+.btn-back-annotation:hover {
+  background: #e0e7ff;
+}
+
+.btn-back-annotation--block {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.partner-preview-label {
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.right-panel-preview-placeholder {
+  padding: 8px 0;
+}
+
+.preview-placeholder-body {
+  font-size: 15px;
+  color: #4b5563;
+  line-height: 1.6;
+  margin: 0 0 16px 0;
 }
 
 .replay-screenshot {
@@ -1244,7 +1451,7 @@ onMounted(() => {
   border-bottom: none;
 }
 
-.log-item.highlighted {
+.log-item--screenshot-active {
   background: linear-gradient(90deg, #eef2ff 0%, #dbeafe 100%);
   border-left: 3px solid #4f46e5;
   box-shadow:
@@ -1255,20 +1462,19 @@ onMounted(() => {
   z-index: 1;
 }
 
-/* Make the key information pop on the highlighted row */
-.log-item.highlighted .log-type-tag {
+.log-item--screenshot-active .log-type-tag {
   transform: translateY(-0.5px);
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.9) inset,
     0 6px 16px rgba(79, 70, 229, 0.18);
 }
 
-.log-item.highlighted .log-content {
+.log-item--screenshot-active .log-content {
   color: #0f172a;
   font-weight: 600;
 }
 
-.log-item.highlighted .log-content::before {
+.log-item--screenshot-active .log-content::before {
   content: '';
   display: inline-block;
   width: 8px;
@@ -1277,6 +1483,45 @@ onMounted(() => {
   background: rgba(79, 70, 229, 0.9);
   margin-right: 8px;
   box-shadow: 0 0 12px rgba(99, 102, 241, 0.35);
+  vertical-align: middle;
+}
+
+.log-item--annotation-target:not(.log-item--screenshot-active) {
+  box-shadow: inset 3px 0 0 0 #d97706;
+  background: #fffbeb;
+}
+
+.log-item--clickable {
+  cursor: pointer;
+}
+
+.log-item--clickable:hover:not(.log-item--screenshot-active) {
+  background: #f9fafb;
+}
+
+.log-item--annotated:not(.log-item--screenshot-active) {
+  background: #f0fdf4;
+  border-left: 3px solid #22c55e;
+  padding-left: 9px;
+}
+
+.log-item--annotated.log-item--clickable:hover:not(.log-item--screenshot-active) {
+  background: #ecfdf5;
+}
+
+.log-annotated-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
   vertical-align: middle;
 }
 
@@ -1430,44 +1675,6 @@ onMounted(() => {
   text-align: left;
 }
 
-.previous-answer-panel {
-  border: 1px dashed #c7d2fe;
-  border-radius: 10px;
-  background: #eef2ff;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-}
-
-.previous-title {
-  font-size: 11px;
-  color: #4f46e5;
-  font-weight: 700;
-  margin-bottom: 6px;
-}
-
-.previous-label {
-  font-size: 13px;
-  color: #1f2937;
-  font-weight: 600;
-}
-
-.previous-transcript {
-  margin-top: 8px;
-}
-
-.previous-transcript span {
-  font-size: 11px;
-  color: #64748b;
-  display: block;
-  margin-bottom: 2px;
-}
-
-.previous-transcript p {
-  margin: 0;
-  font-size: 12px;
-  color: #334155;
-}
-
 .label-option {
   display: flex;
   gap: 10px;
@@ -1607,7 +1814,6 @@ onMounted(() => {
   font-size: 13px;
   line-height: 1.45;
   resize: vertical;
-  min-height: 84px;
   box-sizing: border-box;
   color: #1f2937;
   background: #fff;
@@ -1768,62 +1974,5 @@ onMounted(() => {
 
 .btn-next:hover {
   background: #4b5563;
-}
-
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 30;
-}
-
-.confirm-modal {
-  width: min(92vw, 430px);
-  background: #fff;
-  border-radius: 12px;
-  padding: 18px;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
-}
-
-.confirm-modal h3 {
-  margin: 0 0 8px 0;
-  font-size: 18px;
-  color: #111827;
-}
-
-.confirm-modal p {
-  margin: 0;
-  font-size: 14px;
-  color: #4b5563;
-  line-height: 1.5;
-}
-
-.confirm-actions {
-  margin-top: 14px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.btn-cancel,
-.btn-apply {
-  padding: 9px 12px;
-  border-radius: 8px;
-  border: 1px solid #d1d5db;
-  cursor: pointer;
-}
-
-.btn-cancel {
-  background: #fff;
-  color: #374151;
-}
-
-.btn-apply {
-  background: #6366f1;
-  border-color: #6366f1;
-  color: #fff;
 }
 </style>

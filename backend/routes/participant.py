@@ -1270,12 +1270,14 @@ def transcribe_audio():
                 client = OpenAI(api_key=openai_key)
                 model = 'whisper-1'
             
+            # ISO-639-1 (e.g. en). Whisper uses this to bias recognition; default English.
+            transcribe_lang = (os.getenv('TRANSCRIBE_LANGUAGE') or 'en').strip().lower()
+            create_kwargs = {'model': model, 'response_format': 'text'}
+            if transcribe_lang:
+                create_kwargs['language'] = transcribe_lang
             with open(tmp_path, 'rb') as f:
-                transcription = client.audio.transcriptions.create(
-                    model=model,
-                    file=f,
-                    response_format='text'
-                )
+                create_kwargs['file'] = f
+                transcription = client.audio.transcriptions.create(**create_kwargs)
             # Handle both string (plain text) and Transcription object
             if isinstance(transcription, str):
                 text = transcription
@@ -1807,6 +1809,15 @@ def save_post_annotations(session_identifier, participant_id):
         annotations = data.get('annotations', {})
         if not isinstance(annotations, dict):
             return jsonify({'error': 'annotations must be a JSON object'}), 400
+
+        # Screenshots are captured at session time on actions/logs, not during post_annotation.
+        stripped = {}
+        for aid, row in annotations.items():
+            if isinstance(row, dict):
+                stripped[aid] = {k: v for k, v in row.items() if k != 'screenshot_s3'}
+            else:
+                stripped[aid] = row
+        annotations = stripped
 
         from services.db import _json_safe_payload, is_db_configured, upsert_post_session_annotations
 
