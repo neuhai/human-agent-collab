@@ -140,13 +140,53 @@ def is_db_configured() -> bool:
     return get_database_url() is not None
 
 
+def _db_url_host_is_loopback(database_url: str) -> bool:
+    u = (database_url or '').strip().replace('postgresql+psycopg2://', 'postgresql://', 1)
+    if not u:
+        return False
+    try:
+        from sqlalchemy.engine.url import make_url
+
+        h = (str(make_url(u).host or '')).lower()
+        return h in ('127.0.0.1', 'localhost', '::1')
+    except Exception:
+        ul = u.lower()
+        return '@127.0.0.1' in ul or '@localhost:' in ul or '@localhost/' in ul
+
+
+def _pg_connect_args(database_url: str) -> Dict[str, str]:
+    """
+    psycopg2/libpq: disable GSSAPI encryption by default. Many Postgres images (e.g. Docker)
+    do not negotiate it; macOS libpq may try first and the server drops the connection
+    (symptom: \"server closed the connection unexpectedly\" over SSH tunnels).
+
+    For loopback (e.g. SSH -L to Docker Postgres), pass sslmode=disable in connect_args so it
+    overrides any stale require in the URI. If the URL explicitly requests verify/require SSL
+    (tunneled RDS), do not force disable.
+    """
+    args: Dict[str, str] = {'gssencmode': 'disable'}
+    ul = database_url.lower()
+    # export_session_data + SSH -L to Docker Postgres; .env may still say sslmode=require for RDS.
+    if (os.environ.get('EXPORT_PG_TUNNEL_PORT') or '').strip():
+        args['sslmode'] = 'disable'
+    elif _db_url_host_is_loopback(database_url):
+        if not any(
+            s in ul
+            for s in ('sslmode=require', 'sslmode=verify-full', 'sslmode=verify-ca')
+        ):
+            args['sslmode'] = 'disable'
+    elif (os.environ.get('PGSSLMODE') or '').strip().lower() == 'disable':
+        args['sslmode'] = 'disable'
+    return args
+
+
 def get_engine():
     global _engine
     if _engine is None:
         url = get_database_url()
         if not url:
             raise RuntimeError('Database is not configured')
-        _engine = create_engine(url, pool_pre_ping=True)
+        _engine = create_engine(url, pool_pre_ping=True, connect_args=_pg_connect_args(url))
     return _engine
 
 

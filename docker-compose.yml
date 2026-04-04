@@ -11,8 +11,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: ${POSTGRES_DB:-humanagent}
+    # Bind to loopback only: backend still uses hostname `postgres` on the Docker network.
+    # Publishing to 127.0.0.1 allows `ssh -L LOCAL:127.0.0.1:5432` for local psql/export without exposing 5432 on the instance's public interface.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/database/docker-init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro

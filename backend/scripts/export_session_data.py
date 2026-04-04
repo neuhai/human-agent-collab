@@ -19,6 +19,17 @@ Copy exports from container to host (default output: /app/exports in the image):
   docker compose cp backend:/app/exports ./backend/exports
 
 Requires DATABASE_URL or PG* env. Loads backend/.env if python-dotenv is installed.
+
+SSH tunnel to Docker Postgres on the server:
+
+- Option A: ``export DATABASE_URL='postgresql://USER:PASS@127.0.0.1:LOCALPORT/humanagent'``
+  before running (overrides docker-only ``postgres`` hostname in ``.env``).
+- Option B: keep ``.env`` as ``...@postgres:5432/...`` and run
+  ``export EXPORT_PG_TUNNEL_PORT=15432`` (match ``ssh -L 15432:127.0.0.1:5432 ...``);
+  this script rewrites host to ``127.0.0.1`` and port to that value.
+
+For localhost / tunnel targets, this script sets ``PGSSLMODE=disable`` and forces
+``sslmode=disable`` on ``DATABASE_URL`` as well (URI sslmode overrides env for libpq).
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ import os
 import re
 import sys
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 _BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_ROOT not in sys.path:
@@ -40,6 +52,80 @@ try:
     load_dotenv(os.path.join(_BACKEND_ROOT, '.env'))
 except ImportError:
     pass
+
+
+def _rewrite_docker_postgres_for_ssh_tunnel() -> None:
+    """
+    .env for Compose uses host ``postgres``; that name does not resolve on a laptop.
+    With ``EXPORT_PG_TUNNEL_PORT`` set (local end of ``ssh -L LOCAL:127.0.0.1:5432``),
+    rewrite URL or PG* so connections go through the tunnel.
+    """
+    port_s = (os.environ.get('EXPORT_PG_TUNNEL_PORT') or '').strip()
+    if not port_s:
+        return
+    try:
+        tunnel_port = int(port_s)
+    except ValueError:
+        return
+
+    raw_url = (os.environ.get('DATABASE_URL') or '').strip()
+    if raw_url:
+        try:
+            from sqlalchemy.engine.url import make_url
+
+            u = make_url(raw_url)
+            if u.host and str(u.host).lower() == 'postgres':
+                u = u.set(host='127.0.0.1', port=tunnel_port)
+                os.environ['DATABASE_URL'] = u.render_as_string(hide_password=False)
+        except Exception:
+            pass
+
+    if (os.environ.get('PGHOST') or '').strip().lower() == 'postgres':
+        os.environ['PGHOST'] = '127.0.0.1'
+        os.environ['PGPORT'] = str(tunnel_port)
+
+
+_rewrite_docker_postgres_for_ssh_tunnel()
+
+
+def _disable_ssl_for_local_db_host() -> None:
+    """
+    .env often sets PGSSLMODE=require and sslmode=require on DATABASE_URL for RDS.
+    Docker Postgres has no TLS; libpq prefers URI sslmode over PGSSLMODE, so both must
+    be cleared for SSH -L to 127.0.0.1 or exports get "server closed the connection".
+    """
+    url = (os.environ.get('DATABASE_URL') or '').strip()
+    if url:
+        try:
+            from sqlalchemy.engine.url import make_url
+
+            u = make_url(url)
+            h = (str(u.host or '')).lower()
+            if h in ('127.0.0.1', 'localhost', '::1'):
+                os.environ['PGSSLMODE'] = 'disable'
+                u = u.update_query_dict({'sslmode': 'disable', 'gssencmode': 'disable'})
+                os.environ['DATABASE_URL'] = u.render_as_string(hide_password=False)
+                return
+        except Exception:
+            normalized = url.replace('postgresql+psycopg2://', 'postgresql://', 1)
+            try:
+                parsed = urlparse(normalized)
+                h = (parsed.hostname or '').lower()
+                if h in ('127.0.0.1', 'localhost', '::1'):
+                    os.environ['PGSSLMODE'] = 'disable'
+                    sep = '&' if parsed.query else '?'
+                    low = url.lower()
+                    if 'sslmode=' not in low:
+                        os.environ['DATABASE_URL'] = url + sep + 'sslmode=disable'
+                    return
+            except ValueError:
+                pass
+    host = (os.environ.get('PGHOST') or '').strip().lower()
+    if host in ('127.0.0.1', 'localhost', '::1'):
+        os.environ['PGSSLMODE'] = 'disable'
+
+
+_disable_ssl_for_local_db_host()
 
 
 def _safe_filename_part(name: str) -> str:
