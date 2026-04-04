@@ -6,6 +6,7 @@ Triggers can happen in two ways:
 2) Forced-triggered: if no action-trigger happened, force popup in the late part of the window.
 """
 
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from routes.session import commit_session
@@ -266,6 +267,7 @@ def submit_annotation(
     annotations[participant_id].append({
         'checkpoint': checkpoint,
         'transcription': transcription,
+        'created_at': datetime.now(timezone.utc).isoformat(),
     })
     session['annotation_data'] = annotations
     commit_session(session_key, session)

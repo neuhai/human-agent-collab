@@ -133,13 +133,14 @@ function isMaptaskPostAnnotationLogEntry(entry) {
   return false
 }
 
+/** Log + screenshot carousel: current participant only (no partner actions). */
 const displayMergedLogs = computed(() => {
   const rows = visibleMergedLogs.value
   const exp = (experimentType.value || '').toLowerCase()
-  if (exp === 'maptask') {
-    return rows.filter(isMaptaskPostAnnotationLogEntry)
-  }
-  return rows
+  let filtered = exp === 'maptask' ? rows.filter(isMaptaskPostAnnotationLogEntry) : rows
+  const pid = participantId.value
+  if (!pid) return filtered
+  return filtered.filter((e) => String(e?.participant_id || '') === String(pid))
 })
 
 /** action_id → index in annotationMoments (only rows that are annotatable moments) */
@@ -154,11 +155,6 @@ const momentIndexByActionId = computed(() => {
 function getMomentIndexForLogEntry(entry) {
   if (!entry?.action_id) return -1
   return momentIndexByActionId.value.get(entry.action_id) ?? -1
-}
-
-function logEntryParticipantIsYou(entry) {
-  if (!entry?.participant_id || !participantId.value) return false
-  return String(entry.participant_id) === String(participantId.value)
 }
 
 /** True if merged log row has a screenshot we can show (path or URL). */
@@ -257,6 +253,36 @@ function formatTime(ts) {
   }
 }
 
+/**
+ * Label time for in-session checkpoint transcription: same MM:SS-from-session-start as the action log when possible.
+ * If session start and DB time are inconsistent (diff < 0), show wall-clock submission time instead of 00:00.
+ */
+function formatInSessionAnnotationTimeLabel(ts) {
+  if (!ts || !String(ts).trim()) return '—'
+  try {
+    const d = new Date(ts)
+    const at = d.getTime()
+    if (!Number.isFinite(at)) return '—'
+    if (sessionStartTime.value) {
+      const diff = at - sessionStartTime.value.getTime()
+      if (diff >= 0) {
+        const totalSeconds = Math.floor(diff / 1000)
+        const m = Math.floor(totalSeconds / 60)
+        const s = totalSeconds % 60
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      }
+    }
+    return d.toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+  } catch {
+    return '—'
+  }
+}
+
 function getDisplayName(entry, isYou = false) {
   const pid = entry.participant_id
   const name = entry.participant_name || participantNames.value[pid] || pid?.slice(0, 8) || 'Unknown'
@@ -321,7 +347,7 @@ const selectedInSessionThought = computed(() => {
   if (!match?.transcription?.trim()) {
     return { transcription: '(No in-session annotation recorded for this period.)', timeLabel: '—' }
   }
-  const timeLabel = match.created_at ? formatTime(match.created_at) : '—'
+  const timeLabel = match.created_at ? formatInSessionAnnotationTimeLabel(match.created_at) : '—'
   return { transcription: match.transcription.trim(), timeLabel }
 })
 
@@ -638,16 +664,6 @@ async function saveAnnotationsToFile() {
   }
 }
 
-async function prevMoment() {
-  saveCurrentStepAnnotation()
-  const ok = await saveAnnotationsToFile()
-  if (!ok) return
-  if (currentMomentIndex.value > 0) {
-    currentMomentIndex.value--
-    stepIndex.value = 0
-  }
-}
-
 function isSectionCompleteForSaved(saved, sec) {
   if (sec.kind === 'yes_no_reasons') {
     if (!saved.q4 || (saved.q4 !== 'yes' && saved.q4 !== 'no')) return false
@@ -749,34 +765,6 @@ async function screenshotNavDelta(delta) {
   if (mi >= 0) {
     currentMomentIndex.value = mi
     stepIndex.value = firstIncompleteStepIndexForSaved(annotations.value[entry.action_id] || {})
-  }
-}
-
-async function nextMoment() {
-  const m = currentMoment.value
-  if (!m) return
-  const saved = annotations.value[m.action_id] || {}
-  if (!isMomentAnnotationComplete(saved)) {
-    alert('Please complete all questions for this moment before moving to next.')
-    return
-  }
-  const ok = await saveAnnotationsToFile()
-  if (!ok) return
-  if (currentMomentIndex.value < annotationMoments.value.length - 1) {
-    currentMomentIndex.value++
-    stepIndex.value = 0
-  } else {
-    if (!allAnnotationMomentsComplete()) {
-      const n = annotationMoments.value.filter(
-        (mom) => !isMomentAnnotationComplete(annotations.value[mom.action_id] || {}),
-      ).length
-      alert(
-        `Please annotate all of your actions before finishing. ${n} moment(s) still have incomplete answers. You will be taken to the first incomplete moment.`,
-      )
-      focusFirstIncompleteMoment()
-      return
-    }
-    annotationFinished.value = true
   }
 }
 
@@ -896,15 +884,11 @@ onMounted(() => {
     <div v-else class="annotation-layout">
       <div class="left-panel">
         <h2 class="panel-title">
-          <template v-if="screenshotDisplayEntry && logEntryParticipantIsYou(screenshotDisplayEntry)">
+          <template v-if="screenshotDisplayEntry">
             You are revisiting your action at
             <span class="time-highlight">{{ formatTime(screenshotDisplayEntry.timestamp) }}</span>
           </template>
-          <template v-else-if="screenshotDisplayEntry">
-            <span class="partner-preview-label">{{ getDisplayName(screenshotDisplayEntry, false) }}</span>'s action at
-            <span class="time-highlight">{{ formatTime(screenshotDisplayEntry.timestamp) }}</span>
-          </template>
-          <template v-else> Session replay </template>
+          <template v-else>Session replay</template>
         </h2>
 
         <div class="session-replay-preview">
@@ -956,16 +940,12 @@ onMounted(() => {
               logEntryIsInteractive(entry)
                 ? getMomentIndexForLogEntry(entry) >= 0
                   ? 'Jump to your annotation for this action'
-                  : 'View this action screenshot (partner)'
+                  : 'View screenshot for this action'
                 : undefined
             "
             :role="logEntryIsInteractive(entry) ? 'button' : undefined"
             :aria-label="
-              logEntryIsInteractive(entry)
-                ? (getMomentIndexForLogEntry(entry) >= 0
-                    ? 'Your action at ' + formatTime(entry.timestamp)
-                    : 'Partner action at ' + formatTime(entry.timestamp))
-                : undefined
+              logEntryIsInteractive(entry) ? 'Your action at ' + formatTime(entry.timestamp) : undefined
             "
             @click="onInteractionLogEntryClick(entry)"
             @keydown.enter.prevent="onInteractionLogEntryClick(entry)"
@@ -1162,29 +1142,11 @@ onMounted(() => {
             </button>
           </div>
         </div>
-
-        <div class="nav-footer">
-          <button
-            type="button"
-            class="btn-prev"
-            :disabled="currentMomentIndex <= 0"
-            @click="prevMoment"
-          >
-            Prev
-          </button>
-          <button
-            type="button"
-            class="btn-next"
-            @click="nextMoment"
-          >
-            Skip to next moment
-          </button>
-        </div>
         </template>
 
         <div v-else class="right-panel-preview-placeholder">
           <p class="preview-placeholder-body">
-            You are looking at your partner's action.
+            This screenshot is not the moment you are currently annotating.
           </p>
           <button type="button" class="btn-back-annotation btn-back-annotation--block" @click="syncCarouselToCurrentMoment">
             Back to my current annotation
@@ -1388,11 +1350,6 @@ onMounted(() => {
   display: block;
   width: 100%;
   margin-top: 8px;
-}
-
-.partner-preview-label {
-  font-weight: 700;
-  color: #1e293b;
 }
 
 .right-panel-preview-placeholder {
@@ -1936,43 +1893,4 @@ onMounted(() => {
   50% { opacity: 0.5; }
 }
 
-.nav-footer {
-  margin-top: 24px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.btn-prev,
-.btn-next {
-  padding: 12px 24px;
-  font-size: 14px;
-  font-weight: 500;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.btn-prev {
-  background: #e5e7eb;
-  color: #374151;
-}
-
-.btn-prev:hover:not(:disabled) {
-  background: #d1d5db;
-}
-
-.btn-prev:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-next {
-  background: #6b7280;
-  color: white;
-}
-
-.btn-next:hover {
-  background: #4b5563;
-}
 </style>
