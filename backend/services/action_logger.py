@@ -12,10 +12,44 @@ import uuid
 import base64
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Tuple
 
 from services.annotation_service import is_annotation_enabled
+
+
+def utc_now_iso_z() -> str:
+    """UTC instant as ISO-8601 with Z (matches browser Date parsing; avoids naive local vs UTC skew)."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def coalesce_client_timestamp(client_iso: Optional[str], max_skew_seconds: float = 900.0) -> str:
+    """
+    Use browser-reported instant when parseable and within max_skew_seconds of server UTC.
+
+    Map/chat actions wait for screenshots before HTTP/WebSocket; server-time-only timestamps
+    were tens of seconds late vs AI logs, breaking post-annotation timelines.
+    """
+    now = datetime.now(timezone.utc)
+    fallback = now.isoformat().replace("+00:00", "Z")
+    if not client_iso or not isinstance(client_iso, str):
+        return fallback
+    s = client_iso.strip()
+    if not s:
+        return fallback
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(timezone.utc)
+        skew = abs((dt - now).total_seconds())
+        if skew <= max_skew_seconds:
+            return dt.isoformat().replace("+00:00", "Z")
+    except Exception:
+        pass
+    return fallback
 
 
 # Base directory for logs (relative to backend root)
@@ -153,7 +187,7 @@ def _get_public_state(session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         'session_status': session.get('status', 'waiting'),
         'remaining_seconds': session.get('remaining_seconds'),
-        'current_time': datetime.now().isoformat()
+        'current_time': utc_now_iso_z()
     }
 
 
@@ -214,6 +248,10 @@ def log_action(
     # For agent: pass session and participant to build session_status
     session: Optional[Dict[str, Any]] = None,
     participant: Optional[Dict[str, Any]] = None,
+    # Browser event time (ISO with Z); avoids late timestamps after screenshot capture + queue
+    client_timestamp: Optional[str] = None,
+    # When set (e.g. WebSocket receive instant), overrides client_timestamp for one shared server clock
+    event_timestamp_iso: Optional[str] = None,
 ) -> Optional[str]:
     """
     Append an action log entry to the participant's log file.
@@ -225,9 +263,13 @@ def log_action(
         action_id = str(uuid.uuid4())
         session_dir = _ensure_session_log_dir(session_id)
 
+        if event_timestamp_iso and isinstance(event_timestamp_iso, str) and event_timestamp_iso.strip():
+            entry_ts = event_timestamp_iso.strip()
+        else:
+            entry_ts = coalesce_client_timestamp(client_timestamp)
         entry = {
             'action_id': action_id,
-            'timestamp': datetime.now().isoformat(),
+            'timestamp': entry_ts,
             'session_id': session_id,
             'participant_id': participant_id,
             'session_name': session.get('session_name') if session else '',
@@ -314,3 +356,85 @@ def log_action(
         import traceback
         traceback.print_exc()
         return None
+
+
+def attach_human_action_capture(
+    session_id: str,
+    participant_id: str,
+    action_id: str,
+    screenshot: Optional[str],
+    html_snapshot: Optional[str],
+    session: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Add screenshot / html_snapshot to an existing send_message row (jsonl rewrite).
+    Used when the client sends text first (server-timed) then uploads capture asynchronously.
+    """
+    if screenshot is None and html_snapshot is None:
+        return False
+    log_path = os.path.join(LOGS_BASE_DIR, session_id, f'{participant_id}.jsonl')
+    if not os.path.isfile(log_path):
+        return False
+    out_lines: list[str] = []
+    found = False
+    ann_mode = bool(session and is_annotation_enabled(session))
+    use_s3_assets = ann_mode
+    with open(log_path, 'r', encoding='utf-8') as f:
+        for raw in f:
+            line = raw.rstrip('\n\r')
+            if not line.strip():
+                continue
+            try:
+                ob = json.loads(line)
+            except json.JSONDecodeError:
+                out_lines.append(line)
+                continue
+            if ob.get('action_id') != action_id:
+                out_lines.append(line)
+                continue
+            if str(ob.get('participant_id') or '') != str(participant_id):
+                out_lines.append(line)
+                continue
+            found = True
+            if screenshot is not None:
+                if isinstance(screenshot, str) and screenshot.startswith('data:'):
+                    if use_s3_assets:
+                        s3_uri = _upload_annotation_screenshot_s3(session_id, action_id, screenshot)
+                        if s3_uri:
+                            ob['screenshot'] = s3_uri
+                        else:
+                            ref = _save_base64_to_file(session_id, action_id, 'screenshot', screenshot)
+                            ob['screenshot'] = ref if ref else screenshot
+                    else:
+                        ref = _save_base64_to_file(session_id, action_id, 'screenshot', screenshot)
+                        ob['screenshot'] = ref if ref else screenshot
+                else:
+                    ob['screenshot'] = screenshot
+            if html_snapshot is not None:
+                if use_s3_assets:
+                    if len(html_snapshot) > HTML_SNAPSHOT_INLINE_MAX:
+                        s3_uri = _upload_annotation_html_s3(session_id, action_id, html_snapshot)
+                        if s3_uri:
+                            ob['html_snapshot'] = s3_uri
+                        else:
+                            ref = _save_text_to_file(session_id, action_id, 'html_snapshot', html_snapshot)
+                            ob['html_snapshot'] = ref
+                    else:
+                        s3_uri = _upload_annotation_html_s3(session_id, action_id, html_snapshot)
+                        if s3_uri:
+                            ob['html_snapshot'] = s3_uri
+                        else:
+                            ob['html_snapshot'] = html_snapshot
+                else:
+                    if len(html_snapshot) > HTML_SNAPSHOT_INLINE_MAX:
+                        ref = _save_text_to_file(session_id, action_id, 'html_snapshot', html_snapshot)
+                        ob['html_snapshot'] = ref
+                    else:
+                        ob['html_snapshot'] = html_snapshot
+            out_lines.append(json.dumps(ob, ensure_ascii=False))
+    if not found:
+        return False
+    with open(log_path, 'w', encoding='utf-8') as f:
+        for L in out_lines:
+            f.write(L + '\n')
+    return True

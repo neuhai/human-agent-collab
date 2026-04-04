@@ -110,26 +110,20 @@ const currentProgressPct = computed(() => {
   return ((currentMomentIndex.value * SECTIONS.length + stepIndex.value + 1) / total) * 100
 })
 
+/** Full merged log for the interaction table — do not clip by configured session duration; that hid late send_message / map actions when the session ran past duration or clocks skewed. Researcher Conversations uses full session.messages; this should match. */
 const visibleMergedLogs = computed(() => {
   if (!Array.isArray(mergedLogs.value)) return []
-  if (!sessionStartTime.value || !sessionDurationSeconds.value || sessionDurationSeconds.value <= 0) {
-    return mergedLogs.value
-  }
-  const startMs = sessionStartTime.value.getTime()
-  const maxMs = startMs + sessionDurationSeconds.value * 1000
-  return mergedLogs.value.filter((entry) => {
-    const ts = new Date(entry.timestamp).getTime()
-    return Number.isFinite(ts) && ts >= startMs && ts <= maxMs
-  })
+  return mergedLogs.value
 })
 
 /** Post-session UI: for maptask, show only message + key map actions (full data still in DB / merged_logs). */
 function isMaptaskPostAnnotationLogEntry(entry) {
   const t = entry?.action_type
   const c = String(entry?.action_content || '').trim()
-  if (t === 'send_message') return true
-  if (t === 'map_tool_click' && ['eraser', 'undo', 'reset'].includes(c)) return true
-  if (t === 'map_draw_stop' && c === 'brush_release') return true
+  // Humans: WebSocket logs send_message. AI agents: agent_context_protocol logs type "message".
+  if (t === 'send_message' || t === 'message') return true
+  if (t === 'map_tool_click' && ['brush', 'eraser', 'undo', 'reset'].includes(c)) return true
+  if (t === 'map_draw_stop' && (c === 'brush_release' || c === 'eraser_release')) return true
   return false
 }
 
@@ -205,13 +199,15 @@ function syncCarouselToCurrentMoment() {
 const ACTION_TAG_LABELS = {
   message: 'Send message',
   brush_release: 'Draw route',
+  brush: 'Brush tool',
+  eraser_release: 'Erase route',
   eraser: 'Erase route',
   undo: 'Undo last action',
   reset: 'Reset map',
 }
 
 function getPostAnnotationActionKind(entry) {
-  if (entry?.action_type === 'send_message') return 'message'
+  if (entry?.action_type === 'send_message' || entry?.action_type === 'message') return 'message'
   if (entry?.action_type === 'map_draw_stop') return String(entry.action_content || '').trim() || 'map_draw_stop'
   if (entry?.action_type === 'map_tool_click') return String(entry.action_content || '').trim() || 'map_tool_click'
   return entry?.action_type || 'action'
@@ -220,9 +216,11 @@ function getPostAnnotationActionKind(entry) {
 function getActionTagKey(entry) {
   const t = entry?.action_type
   const c = String(entry?.action_content || '').trim()
-  if (t === 'send_message') return 'message'
+  if (t === 'send_message' || t === 'message') return 'message'
   if (t === 'map_draw_stop' && c === 'brush_release') return 'brush_release'
+  if (t === 'map_draw_stop' && c === 'eraser_release') return 'eraser'
   if (t === 'map_tool_click') {
+    if (c === 'brush') return 'brush'
     if (c === 'eraser') return 'eraser'
     if (c === 'undo') return 'undo'
     if (c === 'reset') return 'reset'
@@ -241,22 +239,47 @@ function getActionTagLabel(entry) {
     .join(' ')
 }
 
-/** Elapsed MM:SS from session start (same anchor as interaction log). Negative diff clamped to 0 (clock skew). */
+/** MM:SS from session-timer elapsed seconds (preferred for in-session annotation submit time). */
+function formatElapsedSeconds(sec) {
+  if (sec === null || sec === undefined || sec === '') return null
+  const n = Number(sec)
+  if (!Number.isFinite(n) || n < 0) return null
+  const totalSeconds = Math.floor(n)
+  const m = Math.floor(totalSeconds / 60)
+  const s = totalSeconds % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+/** Earliest valid timestamp (ms) in a log row list. */
+function minLogTimeMs(rows) {
+  if (!Array.isArray(rows) || !rows.length) return null
+  let min = Infinity
+  for (const e of rows) {
+    const t = new Date(e?.timestamp).getTime()
+    if (!Number.isNaN(t)) min = Math.min(min, t)
+  }
+  return Number.isFinite(min) ? min : null
+}
+
+/**
+ * Elapsed MM:SS from session start (`session_started_at`, or earliest merged log if unavailable).
+ * Do not use wall-clock minute:second — that is not session-relative.
+ */
 function formatTime(ts) {
   if (!ts) return '00:00'
   try {
     const d = new Date(ts)
     if (Number.isNaN(d.getTime())) return '—'
+    let startMs = null
     if (sessionStartTime.value) {
-      const startMs = sessionStartTime.value.getTime()
-      const diff = d.getTime() - startMs
-      const totalSeconds = Math.max(0, Math.floor(diff / 1000))
-      const m = Math.floor(totalSeconds / 60)
-      const s = totalSeconds % 60
-      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      const s = sessionStartTime.value.getTime()
+      if (!Number.isNaN(s)) startMs = s
     }
-    const m = d.getMinutes()
-    const s = d.getSeconds()
+    if (startMs == null) startMs = minLogTimeMs(mergedLogs.value)
+    if (startMs == null) return '—'
+    const totalSeconds = Math.max(0, Math.floor((d.getTime() - startMs) / 1000))
+    const m = Math.floor(totalSeconds / 60)
+    const s = totalSeconds % 60
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   } catch {
     return '00:00'
@@ -269,16 +292,20 @@ function getDisplayName(entry, isYou = false) {
   return isYou ? `${name} (you)` : name
 }
 
-/** Session-time screenshot only (from merged_logs); not post_annotation uploads. */
-function getScreenshotUrlForLogEntry(entry) {
-  if (!entry?.action_id) return null
-  const sessionShot = entry.screenshot
-  if (!sessionShot || !String(sessionShot).trim()) return null
-  const s = String(sessionShot).trim()
+/** Resolve files/… ref or absolute URL for session log assets (screenshot, map_image, …). */
+function getSessionLogAssetUrl(stored) {
+  if (!stored || !String(stored).trim()) return null
+  const s = String(stored).trim()
   if (s.startsWith('http://') || s.startsWith('https://')) return s
   if (!filesBase.value) return null
   const filename = s.startsWith('files/') ? s.slice(6) : s
   return `${filesBase.value}/${filename}`
+}
+
+/** Session-time screenshot only (from merged_logs); not post_annotation uploads. */
+function getScreenshotUrlForLogEntry(entry) {
+  if (!entry?.action_id) return null
+  return getSessionLogAssetUrl(entry.screenshot)
 }
 
 function annotationsPayloadForSave(raw) {
@@ -340,7 +367,13 @@ const selectedInSessionThought = computed(() => {
   if (!match?.transcription?.trim()) {
     return { transcription: '(No in-session annotation recorded for this period.)', timeLabel: '—' }
   }
-  const timeLabel = match.created_at ? formatTime(match.created_at) : '—'
+  const fromElapsed = formatElapsedSeconds(match.elapsed_seconds)
+  const timeLabel =
+    fromElapsed != null
+      ? fromElapsed
+      : match.created_at
+        ? formatTime(match.created_at)
+        : '—'
   return { transcription: match.transcription.trim(), timeLabel }
 })
 
@@ -610,11 +643,14 @@ function loadData() {
         annotations.value = annotationsPayloadForSave(data.saved_annotations)
       }
       if (data.session_started_at) {
-        sessionStartTime.value = new Date(data.session_started_at)
-      } else if (mergedLogs.value.length > 0 && mergedLogs.value[0].timestamp) {
-        sessionStartTime.value = new Date(mergedLogs.value[0].timestamp)
+        const d = new Date(data.session_started_at)
+        sessionStartTime.value = Number.isNaN(d.getTime()) ? null : d
       } else {
         sessionStartTime.value = null
+      }
+      if (!sessionStartTime.value) {
+        const anchor = minLogTimeMs(mergedLogs.value)
+        sessionStartTime.value = anchor != null ? new Date(anchor) : null
       }
       currentMomentIndex.value = 0
       stepIndex.value = 0
@@ -919,8 +955,8 @@ onMounted(() => {
         <div class="log-list-header">Interaction Log</div>
         <div class="log-list">
           <div
-            v-for="entry in displayMergedLogs"
-            :key="entry.action_id"
+            v-for="(entry, logIdx) in displayMergedLogs"
+            :key="entry.action_id || `log-${logIdx}-${entry.timestamp}-${entry.participant_id}-${entry.action_type}`"
             class="log-item"
             :class="{
               'log-item--screenshot-active':
@@ -1522,6 +1558,12 @@ onMounted(() => {
   background: #d1fae5;
   color: #065f46;
   border: 1px solid #a7f3d0;
+}
+
+.tag-brush {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #6ee7b7;
 }
 
 .tag-eraser {

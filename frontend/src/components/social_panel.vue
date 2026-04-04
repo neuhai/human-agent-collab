@@ -5,8 +5,8 @@ import TradeFeed from '../components/trade_feed.vue'
 import TradeForm from '../components/TradeForm.vue'
 import BaseComponent from '../components/BaseComponent.vue'
 import MeetingRoom from '../components/MeetingRoom.vue'
-import { sendMessage as wsSendMessage, onMessageReceived, offMessageReceived, emitTypingIndicator, onTypingIndicator } from '../services/websocket.js'
-import { captureActionContext } from '../composables/useActionCapture.js'
+import { sendMessage as wsSendMessage, getSocket, onMessageReceived, offMessageReceived, emitTypingIndicator, onTypingIndicator } from '../services/websocket.js'
+import { captureActionContextSafe } from '../composables/useActionCapture.js'
 
 const props = defineProps({
     config: {
@@ -239,7 +239,7 @@ const handleTradeSubmit = async (data) => {
                 tradeRequest.item_type = 'price_only'
             }
             
-            const ctx = await captureActionContext()
+            const ctx = await captureActionContextSafe()
             Object.assign(tradeRequest, ctx)
             
             const response = await fetch(url, {
@@ -695,13 +695,29 @@ const sendAudioMessage = async (audioUrl, duration, content) => {
 
     if (sId) {
         try {
-            const ctx = await captureActionContext()
-            await wsSendMessage(sId, myId, receiverForMessage, content || '', {
+            const result = await wsSendMessage(sId, myId, receiverForMessage, content || '', {
                 messageType: 'audio',
                 audioUrl,
                 duration,
-                ...ctx
             })
+            void (async () => {
+                try {
+                    const ctx = await captureActionContextSafe()
+                    const ws = getSocket()
+                    const aid = result?.action_id
+                    if (ws?.connected && aid) {
+                        ws.emit('send_message_context', {
+                            session_id: sId,
+                            sender: myId,
+                            action_id: aid,
+                            screenshot: ctx.screenshot,
+                            html_snapshot: ctx.html_snapshot,
+                        })
+                    }
+                } catch (e) {
+                    console.warn('[SocialPanel] send_message_context (audio):', e)
+                }
+            })()
             console.log('[SocialPanel] Audio message sent via WebSocket')
         } catch (error) {
             console.error('[SocialPanel] Error sending audio message:', error)
@@ -760,8 +776,25 @@ const sendMessage = async () => {
 
     if (sId) {
         try {
-            const ctx = await captureActionContext()
-            await wsSendMessage(sId, myId, receiverForMessage, content, ctx)
+            const result = await wsSendMessage(sId, myId, receiverForMessage, content, {})
+            void (async () => {
+                try {
+                    const ctx = await captureActionContextSafe()
+                    const ws = getSocket()
+                    const aid = result?.action_id
+                    if (ws?.connected && aid) {
+                        ws.emit('send_message_context', {
+                            session_id: sId,
+                            sender: myId,
+                            action_id: aid,
+                            screenshot: ctx.screenshot,
+                            html_snapshot: ctx.html_snapshot,
+                        })
+                    }
+                } catch (e) {
+                    console.warn('[SocialPanel] send_message_context:', e)
+                }
+            })()
             console.log('[SocialPanel] Message sent successfully via WebSocket')
         } catch (error) {
             console.error('[SocialPanel] Error sending message via WebSocket:', error)

@@ -11,6 +11,7 @@ import random
 import time
 from typing import Any, Callable, Dict, Optional
 from datetime import datetime, timedelta, timezone
+from werkzeug.utils import secure_filename
 
 
 def parse_iso_timestamp_utc(s: str) -> datetime:
@@ -117,20 +118,36 @@ def assign_map_for_maptask(participant: dict, session: dict, param_cfg: Optional
     Map Task: assign the appropriate map to the participant based on their role.
     - Guider gets a map with role='guider'
     - Follower gets a map with role='follower'
-    Returns the first matching map from session.params.maps, or None if no match.
+
+    Session maps may live in a flat params dict (after upload) or only in nested experiment
+    params — use the same resolver as the rest of the backend.
     """
-    role = participant.get('role') or participant.get('experiment_params', {}).get('role')
+    role_raw = participant.get('role') or participant.get('experiment_params', {}).get('role')
+    role = (str(role_raw).strip().lower() if role_raw else '')
     if not role:
         return None
 
-    params = session.get('params') or {}
-    maps = params.get('maps') if isinstance(params, dict) else None
+    # Lazy import avoids circular import with routes.participant
+    from routes.participant import get_value_from_session_params
+
+    maps = get_value_from_session_params(session, 'Session.Params.maps')
     if not isinstance(maps, list) or len(maps) == 0:
         return None
 
+    def _norm_map_role(mr: Any) -> str:
+        return (str(mr or 'guider').strip().lower())
+
     for m in maps:
-        if isinstance(m, dict) and (m.get('role') or 'guider') == role:
-            return m
+        if not isinstance(m, dict):
+            continue
+        if _norm_map_role(m.get('role')) == role:
+            out = dict(m)
+            fn = out.get('filename')
+            if fn and not out.get('file_path'):
+                safe = secure_filename(str(fn))
+                if safe:
+                    out['file_path'] = f'/api/maps/{safe}'
+            return out
     return None
 
 

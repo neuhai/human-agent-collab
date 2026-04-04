@@ -323,6 +323,12 @@ def register_handlers(socketio):
                 emit('error', {'message': 'Session not found'})
                 return
             
+            from services.action_logger import utc_now_iso_z
+
+            # Server receive time: same clock for all participants (avoids per-browser skew).
+            # Screenshot is attached later via send_message_context so this runs right after click.
+            received_ts = utc_now_iso_z()
+            msg_ts = received_ts
             # Create message object
             message = {
                 'id': str(uuid.uuid4()),
@@ -331,7 +337,7 @@ def register_handlers(socketio):
                 'receiver': receiver,  # None for group chat
                 'content': content,
                 'message_type': message_type,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': msg_ts,
             }
             if message_type == 'audio':
                 message['audio_url'] = audio_url
@@ -383,7 +389,7 @@ def register_handlers(socketio):
             # Action log (human only gets screenshot/html_snapshot)
             is_human_sender = (sender_type or '').lower() not in ('ai', 'ai_agent')
             from services.action_logger import log_action
-            log_action(
+            logged_action_id = log_action(
                 session_id=actual_session_id,
                 participant_id=sender,
                 is_human=is_human_sender,
@@ -398,7 +404,11 @@ def register_handlers(socketio):
                 audio_file_url=audio_url if message_type == 'audio' else None,
                 session=found_session,
                 participant=sender_participant,
+                client_timestamp=None,
+                event_timestamp_iso=received_ts,
             )
+            if logged_action_id:
+                message['action_id'] = logged_action_id
 
             # In-session annotation: trigger on message send when annotation enabled (human only)
             if is_human_sender:
@@ -418,6 +428,7 @@ def register_handlers(socketio):
             # Confirm to sender (emit to the requesting client)
             emit('message_sent', {
                 'message_id': message['id'],
+                'action_id': logged_action_id,
                 'status': 'success',
                 'session_id': session_id,
                 'sender': sender,
@@ -431,6 +442,50 @@ def register_handlers(socketio):
                 emit('error', {'message': str(e), 'type': 'send_message_error'})
             except Exception:
                 pass
+
+    @socketio.on('send_message_context')
+    def handle_send_message_context(data):
+        """Attach screenshot/html to send_message log row after fast send_message (same action_id)."""
+        try:
+            session_id = data.get('session_id')
+            sender = data.get('sender')
+            action_id = data.get('action_id')
+            screenshot = data.get('screenshot')
+            html_snapshot = data.get('html_snapshot')
+            if not session_id or not sender or not action_id:
+                return
+            if screenshot is None and html_snapshot is None:
+                return
+            import routes.session as session_module
+            sessions = session_module.sessions
+            found_session = None
+            actual_session_id = None
+            for sid, session in sessions.items():
+                if session.get('session_id') == session_id or sid == session_id:
+                    found_session = session
+                    actual_session_id = session.get('session_id') or sid
+                    break
+                elif session.get('session_name') == session_id:
+                    found_session = session
+                    actual_session_id = session.get('session_id') or sid
+                    break
+            if not found_session:
+                return
+            from services.action_logger import attach_human_action_capture
+            ok = attach_human_action_capture(
+                actual_session_id,
+                str(sender),
+                str(action_id),
+                screenshot,
+                html_snapshot,
+                session=found_session,
+            )
+            if not ok:
+                print(f'[WebSocket] send_message_context: attach failed action_id={action_id} sender={sender}')
+        except Exception as e:
+            print(f'[WebSocket] send_message_context error: {e}')
+            import traceback
+            traceback.print_exc()
 
     @socketio.on('typing_indicator')
     def handle_typing_indicator(data):

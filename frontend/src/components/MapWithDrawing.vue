@@ -98,15 +98,15 @@ const getMapImage = () => {
   }
 }
 
-/** Log map action (tool click or draw stop). Deferred: map snapshot + backend log run after paint (no await on click path). */
-const logMapAction = (actionType, actionContent) => {
+/** Log map action (tool click or draw stop). One rAF so canvas/tool UI updates before enqueue; useActionLog adds another rAF + captureActionContextSafe (2 rAF) for styled screenshots. */
+const logMapAction = (actionType, actionContent, extraMetadata = {}) => {
   requestAnimationFrame(() => {
     let mapImage = null
-    let metadata = {}
+    let metadata = { ...extraMetadata }
     if (props.showToolbox) {
       mapImage = getMapImage()
       if (mapType.value === 'txt' && filledCells.value.size > 0) {
-        metadata = { filledCells: [...filledCells.value] }
+        metadata = { ...metadata, filledCells: [...filledCells.value] }
       }
     }
     logActionToBackend({ actionType, actionContent, mapImage, metadata })
@@ -120,22 +120,20 @@ const onToolChange = (newTool) => {
 
 const onTxtMouseUp = () => {
   const wasDrawing = isDrawing.value
+  const strokeTool = tool.value
   isDrawing.value = false
   lastCell.value = null
   if (wasDrawing && props.showToolbox) {
     pushTxtUndoStateIfChanged()
-    void logMapAction('map_draw_stop', 'brush_release')
+    const drawStop =
+      strokeTool === 'eraser' ? 'eraser_release' : 'brush_release'
+    void logMapAction('map_draw_stop', drawStop, { stroke_tool: strokeTool })
   }
 }
 
+/** Only reset segment tracking; stroke ends on window pointerup/mouseup (avoids mouseleave-before-mouseup losing the log). */
 const onTxtMouseLeave = () => {
-  const wasDrawing = isDrawing.value
-  isDrawing.value = false
   lastCell.value = null
-  if (wasDrawing && props.showToolbox) {
-    pushTxtUndoStateIfChanged()
-    void logMapAction('map_draw_stop', 'mouse_leave')
-  }
 }
 
 const mapUrl = computed(() => {
@@ -257,27 +255,54 @@ const updateEraserPreview = (e) => {
 }
 
 const canvasPointerDown = ref(false)
+/** Pointer id when setPointerCapture is active (primary button drawing). */
+const canvasCapturedPointerId = ref(null)
 
-const finishCanvasStroke = (logReason) => {
+const releaseCanvasPointerCaptureIfAny = () => {
+  const id = canvasCapturedPointerId.value
+  const el = canvasRef.value
+  if (id != null && el?.releasePointerCapture) {
+    try {
+      el.releasePointerCapture(id)
+    } catch {
+      /* ignore */
+    }
+  }
+  canvasCapturedPointerId.value = null
+}
+
+const finishCanvasStroke = () => {
   const wasDrawing = isDrawing.value
+  const strokeTool = tool.value
   isDrawing.value = false
   drawStart.value = null
   canvasPointerDown.value = false
+  releaseCanvasPointerCaptureIfAny()
   if (!wasDrawing || !props.showToolbox) {
     if (props.showToolbox && mapType.value === 'image') scheduleSyncMapProgress()
     return
   }
   if (mapType.value === 'image') pushCanvasUndoState()
-  void logMapAction('map_draw_stop', logReason)
+  const drawStop =
+    strokeTool === 'eraser' ? 'eraser_release' : 'brush_release'
+  void logMapAction('map_draw_stop', drawStop, { stroke_tool: strokeTool })
   if (props.showToolbox && mapType.value === 'image') scheduleSyncMapProgress()
 }
 
-const onWindowPointerUp = () => {
-  if (!canvasPointerDown.value) return
-  finishCanvasStroke('brush_release')
+/** End image-canvas or txt-grid stroke when button is released anywhere (canvas mouseup misses releases outside the element). */
+const onWindowStrokeEnd = () => {
+  if (canvasPointerDown.value) {
+    finishCanvasStroke()
+    return
+  }
+  if (mapType.value === 'txt' && props.showToolbox && canDraw.value && isDrawing.value) {
+    onTxtMouseUp()
+  }
 }
 
-const handleCanvasMouseDown = (e) => {
+const handleCanvasPointerDown = (e) => {
+  if (!e.isPrimary) return
+  if (e.pointerType === 'mouse' && e.button !== 0) return
   if (!canDraw.value || !props.showToolbox || mapType.value !== 'image') return
   canvasPointerDown.value = true
   isDrawing.value = true
@@ -294,9 +319,17 @@ const handleCanvasMouseDown = (e) => {
       eraseCircleAt(canvasCtx.value, coords.x, coords.y, r)
     }
   }
+  try {
+    if (canvasRef.value?.setPointerCapture) {
+      canvasRef.value.setPointerCapture(e.pointerId)
+      canvasCapturedPointerId.value = e.pointerId
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
-const handleCanvasMouseMove = (e) => {
+const handleCanvasPointerMove = (e) => {
   if (!canvasCtx.value) return
   if (tool.value === 'eraser') updateEraserPreview(e)
   else if (eraserPreview.value.visible) {
@@ -321,13 +354,15 @@ const handleCanvasMouseMove = (e) => {
   }
 }
 
-const handleCanvasMouseUp = () => {
-  finishCanvasStroke('brush_release')
+const handleCanvasPointerUp = (e) => {
+  if (!e.isPrimary) return
+  if (e.type === 'pointerup' && e.pointerType === 'mouse' && e.button !== 0) return
+  finishCanvasStroke()
 }
 
-const handleCanvasMouseLeave = () => {
+/** Hide eraser ring only; do not end stroke here — mouseleave often fires before mouseup and would swallow the log. */
+const handleCanvasPointerLeave = () => {
   eraserPreview.value = { visible: false, left: 0, top: 0, size: 0 }
-  finishCanvasStroke('mouse_leave')
 }
 
 const undoLast = () => {
@@ -451,14 +486,17 @@ const txtScale = computed(() => {
 })
 
 onMounted(() => {
-  window.addEventListener('pointerup', onWindowPointerUp)
+  window.addEventListener('pointerup', onWindowStrokeEnd)
+  window.addEventListener('mouseup', onWindowStrokeEnd)
   if (mapType.value === 'txt') loadTxtContent()
   else if (mapType.value === 'image' && props.showToolbox) setTimeout(initCanvas, 150)
 })
 
 onBeforeUnmount(() => {
   mounted.value = false
-  window.removeEventListener('pointerup', onWindowPointerUp)
+  window.removeEventListener('pointerup', onWindowStrokeEnd)
+  window.removeEventListener('mouseup', onWindowStrokeEnd)
+  releaseCanvasPointerCaptureIfAny()
 })
 </script>
 
@@ -473,10 +511,11 @@ onBeforeUnmount(() => {
           ref="canvasRef"
           class="drawing-canvas"
           :class="{ 'drawing-canvas--eraser': tool === 'eraser' }"
-          @mousedown="handleCanvasMouseDown"
-          @mousemove="handleCanvasMouseMove"
-          @mouseup="handleCanvasMouseUp"
-          @mouseleave="handleCanvasMouseLeave"
+          @pointerdown="handleCanvasPointerDown"
+          @pointermove="handleCanvasPointerMove"
+          @pointerup="handleCanvasPointerUp"
+          @pointercancel="handleCanvasPointerUp"
+          @pointerleave="handleCanvasPointerLeave"
         />
         <div
           v-if="mapType === 'image' && showToolbox && canDraw && tool === 'eraser' && eraserPreview.visible"
@@ -578,6 +617,7 @@ onBeforeUnmount(() => {
   left: 0;
   z-index: 1;
   pointer-events: auto;
+  touch-action: none;
   cursor: crosshair;
 }
 

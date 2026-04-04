@@ -1,7 +1,7 @@
 # REST API for sessions setting
 
 from flask import request, jsonify, Blueprint
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import os
 import json
@@ -15,6 +15,10 @@ except Exception:
 
 # Create a blueprint for session routes
 session_bp = Blueprint('session', __name__)
+
+
+def _utc_now_iso_z() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # Get all experiments (single source of truth for frontend)
@@ -366,7 +370,7 @@ def create_session():
             'config': {},
             'params': {},
             'interaction': {},
-            'created_at': datetime.now().isoformat(),
+            'created_at': _utc_now_iso_z(),
             'started_at': None,
             'duration_minutes': None,
             'remaining_seconds': None,
@@ -866,7 +870,7 @@ def start_session(session_identifier):
         # Determine started_at value
         started_at_value = None
         if found_before and not found_before.get('started_at'):
-            started_at_value = datetime.now().isoformat()
+            started_at_value = _utc_now_iso_z()
         elif found_before:
             started_at_value = found_before.get('started_at')
         
@@ -1186,7 +1190,7 @@ def upload_essays(session_identifier):
                 'filename': unique_filename,
                 'original_filename': original_filename,  # Preserve original filename
                 'file_path': f'/api/essays/{unique_filename}',
-                'uploaded_at': datetime.now().isoformat()
+                'uploaded_at': _utc_now_iso_z()
             }
             
             uploaded_essays.append(essay_obj)
@@ -1321,7 +1325,7 @@ def upload_maps(session_identifier):
                 'original_filename': original_filename,
                 'file_path': f'/api/maps/{unique_filename}',
                 'role': 'guider',
-                'uploaded_at': datetime.now().isoformat()
+                'uploaded_at': _utc_now_iso_z()
             }
 
             uploaded_maps.append(map_obj)
@@ -1347,13 +1351,44 @@ def upload_maps(session_identifier):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+def _map_file_lookup_dirs():
+    """Uploaded session maps first, then bundled presets (see map_assets/)."""
+    backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return (
+        os.path.join(backend_root, 'uploads', 'maps'),
+        os.path.join(backend_root, 'map_assets'),
+    )
+
+
 # Serve map files
 @session_bp.route('/api/maps/<filename>', methods=['GET'])
 def serve_map(filename):
+    """
+    Map images for Map Task. Primary: uploads/maps (UUID names after researcher upload).
+    Fallback: backend/map_assets/ for preset filenames (e.g. map2_follower.jpg) when session
+    still references the original name or files were not re-uploaded after a container reset.
+    """
     try:
         from flask import send_from_directory
-        upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads', 'maps')
-        return send_from_directory(upload_dir, filename)
+
+        if not filename or '/' in filename or '\\' in filename or '..' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+        safe = secure_filename(filename)
+        if not safe:
+            return jsonify({'error': 'Invalid filename'}), 400
+
+        for directory in _map_file_lookup_dirs():
+            if not os.path.isdir(directory):
+                continue
+            real_dir = os.path.realpath(directory)
+            fp = os.path.join(directory, safe)
+            if not os.path.isfile(fp):
+                continue
+            real_file = os.path.realpath(fp)
+            if real_file == real_dir or not real_file.startswith(real_dir + os.sep):
+                continue
+            return send_from_directory(directory, safe)
+        return jsonify({'error': 'Map not found'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 404
 

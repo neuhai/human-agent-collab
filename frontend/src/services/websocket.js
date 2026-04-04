@@ -43,6 +43,13 @@ export function initWebSocket() {
 
   socket.on('connect_error', (error) => {
     console.error('WebSocket connection error:', error)
+    if (typeof window !== 'undefined' && String(error?.message || '').includes('xhr poll')) {
+      console.warn(
+        '[WebSocket] Polling failed — nothing is accepting connections at',
+        backendUrl,
+        '(e.g. Docker frontend/backend stopped, or `vite preview` without proxy). Map chat uses HTTP log_action; real-time events need a running Socket.IO server.',
+      )
+    }
   })
   
   // Debug: Log all received events (enable only when needed)
@@ -236,6 +243,7 @@ export function sendMessage(sessionId, sender, receiver, content, options = {}) 
     }
     if (options.screenshot) messageData.screenshot = options.screenshot
     if (options.html_snapshot) messageData.html_snapshot = options.html_snapshot
+    if (options.clientTimestamp) messageData.client_timestamp = options.clientTimestamp
     
     console.log('[WebSocket] Emitting send_message event:', messageData)
     console.log('[WebSocket] Socket connected:', ws.connected)

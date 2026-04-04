@@ -181,6 +181,7 @@ class TimerService:
             socketio.emit('timer_update', {
                 'session_id': self.session_id,
                 'remaining_seconds': self.remaining_seconds,
+                'initial_duration_seconds': self.initial_duration,
                 'formatted': self._format_time(self.remaining_seconds),
                 'is_running': self.is_running and not self.is_paused,
                 'is_paused': self.is_paused
@@ -208,6 +209,7 @@ class TimerService:
                 socketio.emit('timer_update', {
                     'session_id': self.session_id,
                     'remaining_seconds': 0,
+                    'initial_duration_seconds': self.initial_duration,
                     'formatted': '00:00',
                     'is_running': False,
                     'is_paused': True

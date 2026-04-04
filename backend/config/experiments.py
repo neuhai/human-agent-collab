@@ -734,7 +734,7 @@ EXPERIMENTS = [
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
                     'default': {
-                        'enabled': True,
+                        'enabled': False,
                         'items': [0, 1],
                     },
                     'description': "Enable the Awareness Dashboard for participants. When enabled, select the information items to display to participants (e.g., others' map progress).",

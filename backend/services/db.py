@@ -73,6 +73,8 @@ class InSessionAnnotationRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # Session-timer elapsed at submit: initial_duration_seconds - remaining_seconds (same clock as UI).
+    elapsed_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (Index('ix_in_session_ann_session_created', 'session_id', 'created_at'),)
 
@@ -200,6 +202,28 @@ def get_session_factory():
     return _SessionLocal
 
 
+def _ensure_in_session_elapsed_seconds_column(engine) -> None:
+    """Add elapsed_seconds to existing in_session_annotations (create_all does not alter tables)."""
+    schema = get_app_schema()
+    try:
+        from sqlalchemy import inspect
+
+        insp = inspect(engine)
+        cols = insp.get_columns('in_session_annotations', schema=schema)
+    except Exception:
+        return
+    names = {c['name'] for c in cols}
+    if 'elapsed_seconds' in names:
+        return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(f'ALTER TABLE "{schema}"."in_session_annotations" ADD COLUMN elapsed_seconds INTEGER')
+            )
+    except Exception as e:
+        print(f'[DB] in_session_annotations.elapsed_seconds migration: {e}')
+
+
 def init_db() -> None:
     """Create application schema (if needed) and tables if they do not exist."""
     schema = get_app_schema()
@@ -208,6 +232,7 @@ def init_db() -> None:
     with engine.begin() as conn:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS {schema}'))
     Base.metadata.create_all(bind=engine)
+    _ensure_in_session_elapsed_seconds_column(engine)
 
 
 def _parse_entry_timestamp(ts: Optional[str]) -> datetime:
@@ -269,6 +294,7 @@ def persist_in_session_annotation(
     checkpoint_index: int,
     transcription: str,
     created_at: Optional[datetime] = None,
+    elapsed_seconds: Optional[int] = None,
 ) -> None:
     if not is_db_configured():
         return
@@ -286,6 +312,7 @@ def persist_in_session_annotation(
         checkpoint_index=int(checkpoint_index),
         transcription=transcription,
         created_at=ts,
+        elapsed_seconds=elapsed_seconds,
     )
     with SessionLocal() as db:
         db.add(row)
@@ -314,6 +341,7 @@ def load_in_session_annotations(session_id: str, participant_id: str) -> List[Di
                     'checkpoint_index': r.checkpoint_index,
                     'transcription': r.transcription,
                     'created_at': ts,
+                    'elapsed_seconds': r.elapsed_seconds,
                 }
             )
         return out
@@ -499,6 +527,7 @@ def load_all_in_session_rows_for_session(session_id: str) -> List[Dict[str, Any]
                     'checkpoint_index': r.checkpoint_index,
                     'transcription': r.transcription,
                     'created_at': ts,
+                    'elapsed_seconds': r.elapsed_seconds,
                 }
             )
         return out

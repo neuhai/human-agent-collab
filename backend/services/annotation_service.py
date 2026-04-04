@@ -7,7 +7,7 @@ Triggers can happen in two ways:
 """
 
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from routes.session import commit_session
 
@@ -21,6 +21,19 @@ ANNOTATION_CHECKPOINT_RANGES = [
 # Force trigger in the last part of each checkpoint window.
 # Example for 15-30: threshold = 30 - (30-15)*0.25 = 26.25%
 FORCED_TRIGGER_WINDOW_RATIO = 0.05
+
+
+def _parse_elapsed_seconds_optional(raw: Any) -> Optional[int]:
+    """Session-timer elapsed at submit (initial_duration - remaining). Reject garbage."""
+    if raw is None:
+        return None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if v < 0 or v > 86400 * 7:
+        return None
+    return v
 
 
 def _parse_client_submitted_at_iso(raw: Optional[str]) -> Optional[datetime]:
@@ -264,6 +277,7 @@ def submit_annotation(
     sessions_store: dict,
     *,
     submitted_at: Optional[str] = None,
+    elapsed_seconds: Optional[int] = None,
 ) -> bool:
     """
     Record annotation submission. If all human participants have submitted, resume session.
@@ -282,16 +296,20 @@ def submit_annotation(
 
     effective_created = _parse_client_submitted_at_iso(submitted_at) or datetime.now(timezone.utc)
     created_iso = effective_created.isoformat()
+    elapsed_val = _parse_elapsed_seconds_optional(elapsed_seconds)
 
     # Store annotation data per participant
     annotations = session.get('annotation_data', {})
     if participant_id not in annotations:
         annotations[participant_id] = []
-    annotations[participant_id].append({
+    ann_entry = {
         'checkpoint': checkpoint,
         'transcription': transcription,
         'created_at': created_iso,
-    })
+    }
+    if elapsed_val is not None:
+        ann_entry['elapsed_seconds'] = elapsed_val
+    annotations[participant_id].append(ann_entry)
     session['annotation_data'] = annotations
     commit_session(session_key, session)
 
@@ -305,6 +323,7 @@ def submit_annotation(
             checkpoint,
             transcription,
             created_at=effective_created,
+            elapsed_seconds=elapsed_val,
         )
     except Exception as db_err:
         print(f'[Annotation] in_session DB persist: {db_err}')

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import ActionDialog from './ActionDialog.vue'
 import TradeForm from './TradeForm.vue'
 import DocPreview from './doc_preview.vue'
-import { captureActionContext } from '../composables/useActionCapture.js'
+import { captureActionContextSafe } from '../composables/useActionCapture.js'
 
 const props = defineProps({
   title: {
@@ -408,7 +408,7 @@ const startProduction = async () => {
     const url = `/api/sessions/${encodedSessionId}/participants/${participantId}/start_production`
     console.log('[Production] Starting production request:', { url, shape: selectedShape.value })
     
-    const ctx = await captureActionContext()
+    const ctx = await captureActionContextSafe()
     const response = await fetch(url, {
       method: 'POST',
       headers: {

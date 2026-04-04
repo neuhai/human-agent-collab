@@ -9,7 +9,7 @@ from config.experiments import PARTICIPANTS, get_experiment_by_id
 from websocket.handlers import broadcast_participant_update
 import copy
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from functions import resolve_function, start_production
 
 # Create a blueprint for participant routes
@@ -19,19 +19,48 @@ participant_bp = Blueprint('participant', __name__)
 sessions = session_module.sessions
 
 
+def _parse_action_timestamp_sort_key(ts) -> float:
+    """Chronological sort key for action log timestamps (Z / offset / legacy naive as UTC)."""
+    if not ts:
+        return 0.0
+    try:
+        s = str(ts).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _find_participant(found_session, participant_id):
+    """Resolve URL participant_id against session roster (id or participant_id alias)."""
+    if not found_session or not participant_id:
+        return None
+    for p in found_session.get('participants', []) or []:
+        if p.get('id') == participant_id or p.get('participant_id') == participant_id:
+            return p
+    return None
+
+
 def _log_human_action(session_key, found_session, participant_id, action_type, action_content,
                       result='success', metadata=None, data=None, page=None, map_image=None):
     """Helper to log human participant action. data is the request JSON for screenshot/html_snapshot."""
     actual_session_id = found_session.get('session_id') or session_key
-    participant = next((p for p in found_session.get('participants', []) if p.get('id') == participant_id), None)
+    participant = _find_participant(found_session, participant_id)
+    if not participant:
+        return
     is_human = (participant.get('type', '') or '').lower() not in ('ai', 'ai_agent')
     if not is_human:
         return  # Only log human actions from HTTP routes (agent actions logged in agent_context_protocol)
     from services.action_logger import log_action
     d = data or {}
+    canonical_pid = participant.get('id') or participant.get('participant_id') or participant_id
     log_action(
         session_id=actual_session_id,
-        participant_id=participant_id,
+        participant_id=canonical_pid,
         is_human=True,
         action_type=action_type,
         action_content=action_content,
@@ -44,6 +73,7 @@ def _log_human_action(session_key, found_session, participant_id, action_type, a
         map_image=map_image or d.get('map_image'),
         session=found_session,
         participant=participant,
+        client_timestamp=d.get('client_timestamp'),
     )
 
 def find_session_by_identifier(session_identifier):
@@ -655,11 +685,16 @@ def update_participant_experiment_params(participant, session):
             # call the function if the field doesn't exist yet.
             elif isinstance(init_path, str) and init_path.startswith('Functions.'):
                 existing_value = participant.get('experiment_params', {}).get(param_name)
-                if existing_value is not None:
-                    # Field already exists (has been modified at runtime), preserve it
+                skip_function = existing_value is not None
+                # Map Task: session maps may arrive after first register; empty {} must re-resolve.
+                if param_name == 'map' and init_path == 'Functions.assign_map_for_maptask':
+                    if not isinstance(existing_value, dict):
+                        skip_function = False
+                    elif not (existing_value.get('filename') or existing_value.get('file_path')):
+                        skip_function = False
+                if skip_function:
                     should_update = False
                 else:
-                    # Field doesn't exist yet, call the function to initialize
                     func = resolve_function(init_path)
                     if func:
                         try:
@@ -1424,11 +1459,7 @@ def update_map_progress(session_identifier, participant_id):
             return jsonify({'success': False, 'error': 'Map progress only applies to Map Task sessions'}), 400
 
         participants_list = found_session.get('participants', [])
-        participant = None
-        for p in participants_list:
-            if p.get('id') == participant_id:
-                participant = p
-                break
+        participant = _find_participant(found_session, participant_id)
 
         if not participant:
             return jsonify({'success': False, 'error': 'Participant not found'}), 404
@@ -1476,17 +1507,18 @@ def log_action_endpoint(session_identifier, participant_id):
         session_key, found_session = find_session_by_identifier(session_identifier)
         if not found_session:
             return jsonify({'success': False, 'error': 'Session not found'}), 404
-        participant = next((p for p in found_session.get('participants', []) if p.get('id') == participant_id), None)
+        participant = _find_participant(found_session, participant_id)
         if not participant:
             return jsonify({'success': False, 'error': 'Participant not found'}), 404
         if (participant.get('type') or '').lower() in ('ai', 'ai_agent'):
             return jsonify({'success': False, 'error': 'Only human participants can log client actions'}), 403
 
         actual_session_id = found_session.get('session_id') or session_key
+        canonical_pid = participant.get('id') or participant.get('participant_id') or participant_id
         from services.action_logger import log_action
         action_id = log_action(
             session_id=actual_session_id,
-            participant_id=participant_id,
+            participant_id=canonical_pid,
             is_human=True,
             action_type=action_type,
             action_content=action_content,
@@ -1499,6 +1531,7 @@ def log_action_endpoint(session_identifier, participant_id):
             map_image=data.get('map_image'),
             session=found_session,
             participant=participant,
+            client_timestamp=data.get('client_timestamp'),
         )
         # In-session annotation: trigger on draw stop when annotation enabled
         if action_type == 'map_draw_stop':
@@ -1508,7 +1541,7 @@ def log_action_endpoint(session_identifier, participant_id):
                     trigger_annotation,
                 )
                 should_trigger, checkpoint = should_trigger_annotation(
-                    session_key, found_session, participant_id, 'draw_stop'
+                    session_key, found_session, canonical_pid, 'draw_stop'
                 )
                 if should_trigger and checkpoint is not None:
                     trigger_annotation(session_key, found_session, checkpoint, sessions)
@@ -1533,6 +1566,7 @@ def submit_annotation(session_identifier, participant_id):
         submitted_at = data.get('submitted_at')
         if submitted_at is not None and not isinstance(submitted_at, str):
             submitted_at = None
+        elapsed_seconds = data.get('elapsed_seconds')
 
         session_key, found_session = find_session_by_identifier(session_identifier)
         if not found_session:
@@ -1554,6 +1588,7 @@ def submit_annotation(session_identifier, participant_id):
             transcription,
             sessions,
             submitted_at=submitted_at,
+            elapsed_seconds=elapsed_seconds,
         )
         return jsonify({'success': True, 'resumed': resumed}), 200
     except Exception as e:
@@ -1629,8 +1664,11 @@ def get_post_annotation_data(session_identifier):
         if not participant_ids and use_sample:
             participant_ids = ['a59bed79-e55a-417e-92cc-e0ff70fc8cf9', 'b6adf54e-f7e9-41f7-af48-a605c95f3d20']
 
-        # Load and merge all logs (local jsonl first, then PostgreSQL if empty)
+        # Load and merge all logs: jsonl on disk + PostgreSQL (union, dedupe by action_id).
+        # Previously we only read DB when no jsonl existed — that dropped rows that lived only in DB
+        # or from participants without a log file, so interaction logs looked incomplete vs session.messages.
         all_entries = []
+        seen_action_ids = set()
         for pid in participant_ids:
             log_path = os.path.join(logs_dir, f'{pid}.jsonl')
             if not os.path.isfile(log_path):
@@ -1642,19 +1680,39 @@ def get_post_annotation_data(session_identifier):
                         if not line:
                             continue
                         entry = json.loads(line)
+                        aid = entry.get('action_id')
+                        if aid:
+                            if aid in seen_action_ids:
+                                continue
+                            seen_action_ids.add(aid)
                         all_entries.append(entry)
             except Exception as e:
                 print(f'[PostAnnotation] Error reading {log_path}: {e}')
 
+        try:
+            from services.db import is_db_configured, load_session_logs
+
+            if is_db_configured():
+                for entry in load_session_logs(session_id):
+                    aid = entry.get('action_id')
+                    if aid:
+                        if aid in seen_action_ids:
+                            continue
+                        seen_action_ids.add(aid)
+                    all_entries.append(entry)
+        except Exception as e:
+            print(f'[PostAnnotation] DB merge: {e}')
+
         if not all_entries:
             try:
                 from services.db import load_session_logs
+
                 all_entries = load_session_logs(session_id)
             except Exception as e:
                 print(f'[PostAnnotation] DB load: {e}')
 
-        # Sort by timestamp
-        all_entries.sort(key=lambda e: e.get('timestamp', ''))
+        # Sort by parsed instant (string sort breaks across Z vs naive ISO)
+        all_entries.sort(key=lambda e: _parse_action_timestamp_sort_key(e.get('timestamp')))
 
         # Filter out initial system auto-generated reset actions for map task follower
         # These are the first reset actions that happen when the session just started
@@ -1677,7 +1735,7 @@ def get_post_annotation_data(session_identifier):
                     if first_action:
                         e_time = e.get('timestamp', '')
                         f_time = first_action.get('timestamp', '')
-                        if e_time < f_time:
+                        if _parse_action_timestamp_sort_key(e_time) < _parse_action_timestamp_sort_key(f_time):
                             continue  # Skip this auto-generated reset
                 filtered_entries.append(e)
 
@@ -1751,6 +1809,7 @@ def get_post_annotation_data(session_identifier):
                             'checkpoint_index': item.get('checkpoint'),
                             'transcription': (item.get('transcription') or ''),
                             'created_at': item.get('created_at') or '',
+                            'elapsed_seconds': item.get('elapsed_seconds'),
                         }
                     )
 

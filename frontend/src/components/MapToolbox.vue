@@ -65,6 +65,19 @@ const moveTooltip = (event) => {
 const hideTooltip = () => {
   activeTooltip.value = null
 }
+
+/** Inline SVGs so html2canvas (post-annotation screenshots) captures icons; FA webfonts often drop in foreignObject. */
+const svgAttrs = {
+  class: 'tool-icon',
+  xmlns: 'http://www.w3.org/2000/svg',
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  'aria-hidden': 'true',
+}
 </script>
 
 <template>
@@ -79,7 +92,11 @@ const hideTooltip = () => {
       @mouseleave="hideTooltip"
       @click="setTool('brush')"
     >
-      <i class="fa-solid fa-paintbrush" aria-hidden="true"></i>
+      <svg v-bind="svgAttrs">
+        <path
+          d="M9.53 16.12a3 3 0 0 0-5.78 1.13 2.25 2.25 0 0 1-2.4 2.24 4.5 4.5 0 0 0 8.4-2.25c0-.42-.14-.82-.39-1.12Zm.08-4.38L15 2.25A2.25 2.25 0 0 1 17.25 0h.01c.66 0 1.3.26 1.77.73l2.25 2.25a2.25 2.25 0 0 1 0 3.18l-5.38 5.38a2.25 2.25 0 0 1-3.18 0l-2.5-2.5Z"
+        />
+      </svg>
     </button>
     <div class="tool-with-flyout">
       <button
@@ -92,7 +109,11 @@ const hideTooltip = () => {
         @mouseleave="hideTooltip"
         @click="setTool('eraser')"
       >
-        <i class="fa-solid fa-eraser" aria-hidden="true"></i>
+        <svg v-bind="svgAttrs">
+          <path d="M7 21h10" />
+          <path d="M7 3h2l10 10-5 5L4 8V6a2 2 0 0 1 2-2Z" />
+          <path d="m13 13 6 6" />
+        </svg>
       </button>
       <div
         v-if="tool === 'eraser'"
@@ -126,7 +147,10 @@ const hideTooltip = () => {
         aria-label="Undo last stroke"
         @click="onUndo"
       >
-        <i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i>
+        <svg v-bind="svgAttrs">
+          <path d="M3 7v6h6" />
+          <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+        </svg>
       </button>
     </span>
     <button
@@ -138,7 +162,10 @@ const hideTooltip = () => {
       @mouseleave="hideTooltip"
       @click="onReset"
     >
-      <i class="fa-solid fa-rotate-left" aria-hidden="true"></i>
+      <svg v-bind="svgAttrs">
+        <polyline points="23 4 23 10 17 10" />
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+      </svg>
     </button>
     <Teleport to="body">
       <div
@@ -208,7 +235,15 @@ const hideTooltip = () => {
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
+  color: #374151;
   transition: all 0.2s;
+}
+
+.tool-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  display: block;
 }
 
 .tool-btn:hover:not(:disabled) {

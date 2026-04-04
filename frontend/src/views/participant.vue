@@ -10,7 +10,8 @@ import myTasks from '../components/my_task.vue'
 import DocPreview from '../components/doc_preview.vue'
 import ActionDialog from '../components/ActionDialog.vue'
 import AnnotationPopup from '../components/AnnotationPopup.vue'
-import { captureActionContext } from '../composables/useActionCapture.js'
+import { captureActionContextSafe, waitForActionCaptureIdle } from '../composables/useActionCapture.js'
+import { waitForPendingActionLogs } from '../composables/useActionLog.js'
 
 
 defineProps({
@@ -73,14 +74,25 @@ const navigateToPostAnnotationIfNeeded = async () => {
     const session = await res.json()
     const ann = session.experiment_config?.annotation
     const enabled = ann === true || (ann && ann.enabled)
-    if (enabled) {
-      router.push({
+    if (!enabled) return
+
+    flushingLogsForPostAnnotation.value = true
+    try {
+      try {
+        await flushActionLogsAndCapturesForNavigation()
+      } catch (e) {
+        console.warn('[Participant]', e?.message || e)
+      }
+      await router.push({
         path: '/post-annotation',
-        query: { session_id: session.session_id || sessionIdentifier, participant_id: pid }
+        query: { session_id: session.session_id || sessionIdentifier, participant_id: pid },
       })
+    } finally {
+      flushingLogsForPostAnnotation.value = false
     }
   } catch (e) {
     console.error('[Participant] Error checking post-annotation:', e)
+    flushingLogsForPostAnnotation.value = false
   }
 }
 
@@ -120,6 +132,22 @@ const readingTimerInterval = ref(null)
 const hasEnteredInterface = ref(false)
 const readingWindowEnded = ref(false)
 const sessionEnded = ref(false)
+/** Full-screen overlay while draining action logs/screenshots before opening post-session annotation */
+const flushingLogsForPostAnnotation = ref(false)
+
+const POST_ANNOTATION_FLUSH_TIMEOUT_MS = 45000
+
+async function flushActionLogsAndCapturesForNavigation() {
+  await Promise.race([
+    Promise.all([waitForPendingActionLogs(), waitForActionCaptureIdle()]),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Timed out waiting for action logs to finish')),
+        POST_ANNOTATION_FLUSH_TIMEOUT_MS,
+      ),
+    ),
+  ])
+}
 const candidateDocument = ref(null)
 const candidateNames = ref([])
 const selectedCandidate = ref('')
@@ -381,6 +409,9 @@ const showAnnotationPopup = ref(false)
 const annotationCheckpoint = ref(0)
 /** True after this participant submitted but other human(s) have not yet */
 const annotationWaitingForPartners = ref(false)
+/** From timer_update: initial_duration_seconds and remaining_seconds (same clock as on-screen timer). */
+const timerInitialDurationSeconds = ref(null)
+const timerLastRemainingSeconds = ref(null)
 
 // Store cleanup function reference
 let cleanupParticipantsListener = null
@@ -928,7 +959,7 @@ const submitInitialVote = async () => {
         initial_vote: selectedCandidate.value
       }
     }
-    const ctx = await captureActionContext()
+    const ctx = await captureActionContextSafe()
     Object.assign(updatedParticipant, ctx)
     
     // Use PUT method to update participant
@@ -1048,7 +1079,7 @@ const submitFinalVote = async () => {
         final_vote: selectedCandidate.value
       }
     }
-    const ctx = await captureActionContext()
+    const ctx = await captureActionContextSafe()
     Object.assign(updatedParticipant, ctx)
     
     // Use PUT method to update participant
@@ -1603,12 +1634,20 @@ const submitAnnotation = async (payload) => {
     alert('Session or participant information not found.')
     return
   }
+  let elapsedSeconds = null
+  const init = timerInitialDurationSeconds.value
+  const rem = timerLastRemainingSeconds.value
+  if (init != null && rem != null && Number.isFinite(init) && Number.isFinite(rem)) {
+    elapsedSeconds = Math.max(0, Math.floor(init - rem))
+  }
   try {
     const encodedSessionId = encodeURIComponent(sessionIdentifier)
+    const payload = { transcription, submitted_at: submittedAt }
+    if (elapsedSeconds != null) payload.elapsed_seconds = elapsedSeconds
     const response = await fetch(`/api/sessions/${encodedSessionId}/participants/${participantId}/submit_annotation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcription, submitted_at: submittedAt })
+      body: JSON.stringify(payload)
     })
     const data = await response.json()
     if (data.success) {
@@ -1652,7 +1691,7 @@ const handleInvestmentSubmit = async (data) => {
         investment_amount: parseFloat(data.values.investment_amount) || 0,
         investment_type: data.values.investment_type || 'individual'
       }
-      const ctx = await captureActionContext()
+      const ctx = await captureActionContextSafe()
       Object.assign(investmentRequest, ctx)
       
       const response = await fetch(url, {
@@ -1783,10 +1822,21 @@ onMounted(async () => {
           if (data.session_id && data.session_id !== sessionIdForWebSocket) {
             return
           }
-          
+
+          if (data.initial_duration_seconds != null && data.initial_duration_seconds !== '') {
+            const idur = Number(data.initial_duration_seconds)
+            if (Number.isFinite(idur) && idur >= 0) {
+              timerInitialDurationSeconds.value = Math.floor(idur)
+            }
+          }
+
             // Update timer display
           if (data.remaining_seconds !== undefined && data.remaining_seconds !== null) {
             const totalSeconds = data.remaining_seconds
+            const remN = Number(totalSeconds)
+            if (Number.isFinite(remN) && remN >= 0) {
+              timerLastRemainingSeconds.value = Math.floor(remN)
+            }
             const minutes = Math.floor(totalSeconds / 60)
             const seconds = totalSeconds % 60
             timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
@@ -2099,6 +2149,25 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- Wait for pending action logs / screenshots before post-session annotation route -->
+  <div
+    v-if="flushingLogsForPostAnnotation"
+    class="modal-overlay post-annotation-flush-overlay"
+    role="alertdialog"
+    aria-busy="true"
+    aria-labelledby="post-annotation-flush-title"
+  >
+    <div class="modal-content post-annotation-flush-modal" @click.stop>
+      <div class="post-annotation-flush-body">
+        <div class="post-annotation-flush-spinner" aria-hidden="true" />
+        <h3 id="post-annotation-flush-title">Saving your session...</h3>
+        <p class="post-annotation-flush-hint">
+          You will be redirected to post-session annotations when this completes.
+        </p>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -2350,6 +2419,52 @@ onUnmounted(() => {
 .btn-primary:disabled {
   background: #9ca3af;
   cursor: not-allowed;
+}
+
+/* Post-session: drain action logs before router navigation */
+.post-annotation-flush-overlay {
+  z-index: 10002;
+  background: rgba(15, 23, 42, 0.65);
+}
+
+.post-annotation-flush-modal {
+  width: min(420px, 92vw);
+  padding: 0;
+}
+
+.post-annotation-flush-body {
+  padding: 28px 24px 32px;
+  text-align: center;
+}
+
+.post-annotation-flush-body h3 {
+  margin: 0 0 10px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.post-annotation-flush-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #4b5563;
+}
+
+.post-annotation-flush-spinner {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 18px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: post-annotation-flush-spin 0.75s linear infinite;
+}
+
+@keyframes post-annotation-flush-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Auto Start Popup Styles */

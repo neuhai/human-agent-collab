@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { captureActionContext } from '../composables/useActionCapture.js'
+import { captureActionContextSafe } from '../composables/useActionCapture.js'
 
 const props = defineProps({
   pendingOffers: {
@@ -215,7 +215,7 @@ const respondToOffer = async (offerId, response) => {
   try {
     const encodedSessionId = encodeURIComponent(props.sessionIdentifier)
     const url = `/api/sessions/${encodedSessionId}/participants/${currentUserId.value}/respond_to_offer`
-    const ctx = await captureActionContext()
+    const ctx = await captureActionContextSafe()
     
     const response_data = await fetch(url, {
       method: 'POST',
@@ -249,7 +249,7 @@ const cancelTradeOffer = async (offerId) => {
   try {
     const encodedSessionId = encodeURIComponent(props.sessionIdentifier)
     const url = `/api/sessions/${encodedSessionId}/participants/${currentUserId.value}/cancel_offer`
-    const ctx = await captureActionContext()
+    const ctx = await captureActionContextSafe()
     
     const response = await fetch(url, {
       method: 'POST',
