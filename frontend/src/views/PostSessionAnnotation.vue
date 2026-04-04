@@ -133,14 +133,14 @@ function isMaptaskPostAnnotationLogEntry(entry) {
   return false
 }
 
-/** Log + screenshot carousel: current participant only (no partner actions). */
+/** Full interaction log (all participants). Screenshot carousel / click-to-preview: own rows only — see screenshotNavEntries. */
 const displayMergedLogs = computed(() => {
   const rows = visibleMergedLogs.value
   const exp = (experimentType.value || '').toLowerCase()
-  let filtered = exp === 'maptask' ? rows.filter(isMaptaskPostAnnotationLogEntry) : rows
-  const pid = participantId.value
-  if (!pid) return filtered
-  return filtered.filter((e) => String(e?.participant_id || '') === String(pid))
+  if (exp === 'maptask') {
+    return rows.filter(isMaptaskPostAnnotationLogEntry)
+  }
+  return rows
 })
 
 /** action_id → index in annotationMoments (only rows that are annotatable moments) */
@@ -157,6 +157,11 @@ function getMomentIndexForLogEntry(entry) {
   return momentIndexByActionId.value.get(entry.action_id) ?? -1
 }
 
+function logEntryParticipantIsYou(entry) {
+  if (!entry?.participant_id || !participantId.value) return false
+  return String(entry.participant_id) === String(participantId.value)
+}
+
 /** True if merged log row has a screenshot we can show (path or URL). */
 function logEntryHasScreenshot(entry) {
   if (!entry?.screenshot) return false
@@ -167,7 +172,10 @@ function logEntryHasScreenshot(entry) {
   return !!filesBase.value
 }
 
-const screenshotNavEntries = computed(() => displayMergedLogs.value.filter((e) => logEntryHasScreenshot(e)))
+/** Only your rows with screenshots for carousel / click-to-preview (partner log lines stay visible but are not navigable here). */
+const screenshotNavEntries = computed(() =>
+  displayMergedLogs.value.filter((e) => logEntryParticipantIsYou(e) && logEntryHasScreenshot(e)),
+)
 
 const screenshotCarouselIndex = ref(0)
 
@@ -287,13 +295,26 @@ function annotationsPayloadForSave(raw) {
 
 const screenshotUrl = computed(() => getScreenshotUrlForLogEntry(screenshotDisplayEntry.value))
 
-function bucketIndexFromProgressPct(pct) {
-  if (pct < 33) return 0
-  if (pct <= 66) return 1
-  return 2
+/**
+ * Map [0,100] session progress to one of three in-session checkpoints (≈25%, 50%, 75%)
+ * by nearest anchor — matches how checkpoints are spaced in the experiment.
+ */
+function checkpointIndexFromNearestAnchorPct(pct) {
+  const anchors = [25, 50, 75]
+  let best = 0
+  let bestD = Infinity
+  for (let i = 0; i < anchors.length; i++) {
+    const d = Math.abs(pct - anchors[i])
+    if (d < bestD - 1e-9) {
+      bestD = d
+      best = i
+    }
+  }
+  return best
 }
 
 const selectedInSessionThought = computed(() => {
+  const _trackMoment = currentMomentIndex.value
   const m = currentMoment.value
   const ann = inSessionAnnotations.value || []
   if (!m?.timestamp || !sessionStartTime.value) {
@@ -312,7 +333,7 @@ const selectedInSessionThought = computed(() => {
   const start = sessionStartTime.value.getTime()
   const elapsedSec = (actionTime - start) / 1000
   const pct = elapsedSec < 0 ? 0 : (elapsedSec / dur) * 100
-  const bucket = bucketIndexFromProgressPct(pct)
+  const bucket = checkpointIndexFromNearestAnchorPct(pct)
   const list = [...ann].sort((a, b) => (Number(a.checkpoint_index) || 0) - (Number(b.checkpoint_index) || 0))
   const match = list.find((x) => Number(x.checkpoint_index) === bucket)
   if (!match?.transcription?.trim()) {
@@ -696,11 +717,13 @@ function focusFirstIncompleteMoment() {
 }
 
 function logEntryIsInteractive(entry) {
+  if (!logEntryParticipantIsYou(entry)) return false
   if (getMomentIndexForLogEntry(entry) >= 0) return true
   return logEntryHasScreenshot(entry)
 }
 
 async function onInteractionLogEntryClick(entry) {
+  if (!logEntryParticipantIsYou(entry)) return
   const navIdx = screenshotNavEntries.value.findIndex((e) => e.action_id === entry.action_id)
   const ownMi = getMomentIndexForLogEntry(entry)
   if (ownMi < 0 && navIdx < 0) return
@@ -905,18 +928,25 @@ onMounted(() => {
                 currentMoment && entry.action_id === currentMoment.action_id,
               'log-item--clickable': logEntryIsInteractive(entry),
               'log-item--annotated': isLogEntryFullyAnnotated(entry),
+              'log-item--partner': !logEntryParticipantIsYou(entry),
             }"
             :tabindex="logEntryIsInteractive(entry) ? 0 : undefined"
             :title="
-              logEntryIsInteractive(entry)
-                ? getMomentIndexForLogEntry(entry) >= 0
-                  ? 'Jump to your annotation for this action'
-                  : 'View screenshot for this action'
-                : undefined
+              !logEntryParticipantIsYou(entry)
+                ? 'Partner (screenshot preview is only for your actions)'
+                : logEntryIsInteractive(entry)
+                  ? getMomentIndexForLogEntry(entry) >= 0
+                    ? 'Jump to your annotation for this action'
+                    : 'View screenshot for this action'
+                  : undefined
             "
             :role="logEntryIsInteractive(entry) ? 'button' : undefined"
             :aria-label="
-              logEntryIsInteractive(entry) ? 'Your action at ' + formatTime(entry.timestamp) : undefined
+              !logEntryParticipantIsYou(entry)
+                ? 'Partner at ' + formatTime(entry.timestamp)
+                : logEntryIsInteractive(entry)
+                  ? 'Your action at ' + formatTime(entry.timestamp)
+                  : undefined
             "
             @click="onInteractionLogEntryClick(entry)"
             @keydown.enter.prevent="onInteractionLogEntryClick(entry)"
@@ -1417,6 +1447,10 @@ onMounted(() => {
 .log-item--annotation-target:not(.log-item--screenshot-active) {
   box-shadow: inset 3px 0 0 0 #d97706;
   background: #fffbeb;
+}
+
+.log-item--partner {
+  opacity: 0.92;
 }
 
 .log-item--clickable {
