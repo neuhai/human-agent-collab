@@ -25,11 +25,11 @@ const tooltipPosition = ref({ x: 0, y: 0 })
 // Default descriptions based on path/control
 const componentDescriptions = {
   'Participant.role': {
-    'follower': 'You are the follower. You need to reproduce the map based on the guider\'s description.',
-    'guider': 'You are the guider. You need to communicate with the follower to reproduce the correct route on the map.',
+    'follower': 'You are the follower. You need to reproduce the map based on the guide\'s description.',
+    'guide': 'You are the guide. You need to communicate with the follower to reproduce the correct route on the map.',
     'default': 'Your role in this Map Task experiment.'
   },
-  'Participant.map': 'The map showing landmarks. Follower has a blank map to draw on, Guider has the route to describe.',
+  'Participant.map': 'The map showing landmarks. Follower has a blank map to draw on, Guide has the route to describe.',
   'Participant.money': 'Your current money balance in the experiment.',
   'Participant.specialty': 'Your specialty shape - you can produce this shape at lower cost.',
   'Participant.inventory': 'Shapes you have completed producing.',
@@ -47,7 +47,7 @@ const getDescription = () => {
   if (path === 'Participant.role') {
     const role = props.binding?.value?.toLowerCase()
     if (role === 'follower') return componentDescriptions['Participant.role']['follower']
-    if (role === 'guider') return componentDescriptions['Participant.role']['guider']
+    if (role === 'guide') return componentDescriptions['Participant.role']['guide']
     return componentDescriptions['Participant.role']['default']
   }
   
@@ -1505,7 +1505,7 @@ const submitEssayRank = async () => {
   text-transform: capitalize;
 }
 
-.control-role-badge .role-badge.guider {
+.control-role-badge .role-badge.guide {
   background: #dbeafe;
   color: #1d4ed8;
 }

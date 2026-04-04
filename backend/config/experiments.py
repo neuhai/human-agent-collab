@@ -713,7 +713,7 @@ EXPERIMENTS = [
     {
         "id": "maptask",
         "name": "The Map Task",
-        "description": "**Setup: ** A guider is given a map including the landmarks and a route. A follower is gievn a map with landmarks only. **Communication: ** The two participants can send messages to each other. **Goal: ** The two participants need to collaborate to let the follower reproduce the route.",
+        "description": "**Setup: ** A guide is given a map including the landmarks and a route. A follower is gievn a map with landmarks only. **Communication: ** The two participants can send messages to each other. **Goal: ** The two participants need to collaborate to let the follower reproduce the route.",
         "tags": ["Turn-Taking"],
         "params": [
             {
@@ -791,7 +791,7 @@ EXPERIMENTS = [
                 {
                     "id": "info_dashboard",
                     "label": "Info Dashboard",
-                    "visible_if": "Session.Interaction.awarenessDashboard.enabled && Participant.role == 'guider'",
+                    "visible_if": "Session.Interaction.awarenessDashboard.enabled && Participant.role == 'guide'",
                     "bindings": [
                         {
                             "label": "Name",
@@ -1048,7 +1048,7 @@ PARTICIPANTS = [
                 },
                 "role": {
                     "type": "string",
-                    "options": ["guider", "follower"],
+                    "options": ["guide", "follower"],
                     "default": ""
                 },
                 "mbti": {

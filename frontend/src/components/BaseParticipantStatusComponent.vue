@@ -216,7 +216,7 @@ const sortedRankings = computed(() => {
             </div>
         </div>
 
-        <!-- Map Progress: follower's drawing for map task (guider awareness) -->
+        <!-- Map Progress: follower's drawing for map task (guide awareness) -->
         <div v-if="mapProgressBinding" class="row map-progress-row">
             <div class="map-progress-section">
                 <span class="field-label">{{ mapProgressBinding.label }}:</span>

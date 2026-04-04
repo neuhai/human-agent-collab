@@ -20,7 +20,7 @@ const onSubmit = (payload) => {
     <p class="test-desc">Click the button below to open the annotation popup for testing.</p>
     <button class="open-btn" @click="showPopup = true">Open Annotation Popup</button>
 
-    <p class="test-desc" style="margin-top: 24px;">Post-session annotation (uses sample data with guider participant):</p>
+    <p class="test-desc" style="margin-top: 24px;">Post-session annotation (uses sample data with guide participant):</p>
     <RouterLink to="/post-annotation?session_id=9b472636-6687-4130-8bae-0556525250ff&participant_id=3998d45e-20c4-4d6b-bc65-373fbb76b6b2" class="open-btn" style="display: inline-block; text-decoration: none;">Open Post-Session Annotation</RouterLink>
 
     <div v-if="lastSubmit" class="last-submit">

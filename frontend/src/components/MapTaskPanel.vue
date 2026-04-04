@@ -35,9 +35,9 @@ const getDescription = () => {
   const roleLower = role.toLowerCase()
   
   if (roleLower === 'follower') {
-    return 'Your blank map where you draw the route based on the guider\'s description.'
+    return 'Your blank map where you draw the route based on the guide\'s description.'
   }
-  if (roleLower === 'guider') {
+  if (roleLower === 'guide') {
     return 'The reference map showing the correct route. Describe this route to the follower.'
   }
   

@@ -116,7 +116,7 @@ def assign_tasks(participant: dict, session: dict, param_cfg: Optional[dict] = N
 def assign_map_for_maptask(participant: dict, session: dict, param_cfg: Optional[dict] = None) -> Optional[dict]:
     """
     Map Task: assign the appropriate map to the participant based on their role.
-    - Guider gets a map with role='guider'
+    - Guide gets a map with role='guide'
     - Follower gets a map with role='follower'
 
     Session maps may live in a flat params dict (after upload) or only in nested experiment
@@ -135,7 +135,7 @@ def assign_map_for_maptask(participant: dict, session: dict, param_cfg: Optional
         return None
 
     def _norm_map_role(mr: Any) -> str:
-        return (str(mr or 'guider').strip().lower())
+        return (str(mr or 'guide').strip().lower())
 
     for m in maps:
         if not isinstance(m, dict):

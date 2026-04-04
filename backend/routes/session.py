@@ -1342,7 +1342,7 @@ def upload_maps(session_identifier):
                 'filename': unique_filename,
                 'original_filename': original_filename,
                 'file_path': f'/api/maps/{unique_filename}',
-                'role': 'guider',
+                'role': 'guide',
                 'uploaded_at': _utc_now_iso_z()
             }
 

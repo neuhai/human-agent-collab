@@ -1443,7 +1443,7 @@ def handle_participant_login():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-# Update map_progress (Map Task: follower's drawing state for guider awareness)
+# Update map_progress (Map Task: follower's drawing state for guide awareness)
 @participant_bp.route('/api/sessions/<path:session_identifier>/participants/<participant_id>/map_progress', methods=['POST'])
 def update_map_progress(session_identifier, participant_id):
     try:

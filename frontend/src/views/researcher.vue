@@ -239,7 +239,7 @@ const FALLBACK_EXPERIMENTS = [
     {
         "id": "maptask",
         "name": "The Map Task",
-        "description": "**Setup: ** A guider is given a map including the landmarks and a route. A follower is gievn a map with landmarks only. **Communication: ** The two participants can send messages to each other. **Goal: ** The two participants need to collaborate to let the follower reproduce the route.",
+        "description": "**Setup: ** A guide is given a map including the landmarks and a route. A follower is given a map with landmarks only. **Communication: ** The two participants can send messages to each other. **Goal: ** The two participants need to collaborate to let the follower reproduce the route.",
         "tags": ["Turn-Taking"],
         "params": [
             {

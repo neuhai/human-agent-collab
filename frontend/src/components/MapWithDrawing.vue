@@ -385,7 +385,7 @@ const undoLast = () => {
   logMapAction('map_tool_click', 'undo')
 }
 
-// Sync map_progress to backend for guider's Info Dashboard (follower only)
+// Sync map_progress to backend for guide's Info Dashboard (follower only)
 let syncTimeout = null
 const scheduleSyncMapProgress = () => {
   if (!props.showToolbox || !canDraw.value || !props.map) return

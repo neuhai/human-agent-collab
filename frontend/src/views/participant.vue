@@ -34,7 +34,7 @@ const tooltipPosition = ref({ x: 0, y: 0 })
 const tooltipContent = {
   rules: 'View the experiment rules and instructions.',
   sessionStatus: 'Current status of the experiment session: Waiting, Running, or Paused.',
-  role: 'Your assigned role in this session (e.g. Guider or Follower in the Map Task).',
+  role: 'Your assigned role in this session (e.g. Guide or Follower in the Map Task).',
 }
 
 const showTooltip = (tooltipId, event) => {
@@ -302,7 +302,7 @@ const mapTaskRoleForHeader = computed(() => {
 
 const headerRoleBadgeClass = computed(() => {
   const r = String(mapTaskRoleForHeader.value || '').toLowerCase()
-  if (r === 'guider') return 'guider'
+  if (r === 'guide') return 'guide'
   if (r === 'follower') return 'follower'
   return 'role-other'
 })
@@ -2243,7 +2243,7 @@ onUnmounted(() => {
   cursor: default;
 }
 
-.header-role-tag.guider {
+.header-role-tag.guide {
   background: #dbeafe;
   color: #1d4ed8;
 }

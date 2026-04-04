@@ -144,10 +144,10 @@ const otherParticipants = computed(() => {
     })
 })
 
-/** CSS class for role badge — matches BaseComponent role_badge (map task guider / follower) */
+/** CSS class for role badge — matches BaseComponent role_badge (map task guide / follower) */
 const roleBadgeClass = (role) => {
     const r = String(role ?? '').toLowerCase().trim()
-    if (r === 'guider' || r === 'follower') return r
+    if (r === 'guide' || r === 'follower') return r
     return 'role-other'
 }
 
@@ -1662,7 +1662,7 @@ onUnmounted(() => {
     line-height: 1.2;
 }
 
-.role-badge.guider {
+.role-badge.guide {
     background: #dbeafe;
     color: #1d4ed8;
 }

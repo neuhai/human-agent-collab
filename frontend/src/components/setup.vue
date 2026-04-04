@@ -176,7 +176,7 @@ const DEFAULT_PARTICIPANT_CONFIG = {
     id: { type: 'string', default: '' },
     name: { type: 'string', default: '' },
     type: { type: 'string', options: ['human', 'ai'], default: '' },
-    role: { type: 'string', options: ['guider', 'follower'], default: '' }
+    role: { type: 'string', options: ['guide', 'follower'], default: '' }
   }
 }
 
@@ -3218,10 +3218,10 @@ const loadSessionFromName = async () => {
                             <div class="map-role-select">
                               <select 
                                 class="select-small" 
-                                :value="map.role || 'guider'"
+                                :value="map.role || 'guide'"
                                 @change="updateMapRole(index, $event.target.value)"
                               >
-                                <option value="guider">Guider</option>
+                                <option value="guide">Guide</option>
                                 <option value="follower">Follower</option>
                               </select>
                             </div>
