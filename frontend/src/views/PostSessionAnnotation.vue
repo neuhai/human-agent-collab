@@ -262,8 +262,9 @@ function minLogTimeMs(rows) {
 }
 
 /**
- * Elapsed MM:SS from session start (`session_started_at`, or earliest merged log if unavailable).
- * Do not use wall-clock minute:second — that is not session-relative.
+ * Elapsed MM:SS from wall clock: `ts` minus `session_started_at` (or earliest merged log).
+ * Prefer `formatLogEntryTime(entry)` for interaction rows — it uses `session_elapsed_seconds`
+ * when present (timer-consistent; excludes in-session annotation pauses).
  */
 function formatTime(ts) {
   if (!ts) return '00:00'
@@ -284,6 +285,20 @@ function formatTime(ts) {
   } catch {
     return '00:00'
   }
+}
+
+/** MM:SS for a merged log row: backend `session_elapsed_seconds` when set; else `formatTime(timestamp)`. */
+function formatLogEntryTime(entry) {
+  if (!entry) return '00:00'
+  const sec = entry.session_elapsed_seconds
+  if (sec !== null && sec !== undefined && sec !== '') {
+    const n = Number(sec)
+    if (Number.isFinite(n) && n >= 0) {
+      const formatted = formatElapsedSeconds(n)
+      if (formatted) return formatted
+    }
+  }
+  return formatTime(entry.timestamp)
 }
 
 function getDisplayName(entry, isYou = false) {
@@ -345,7 +360,15 @@ const selectedInSessionThought = computed(() => {
   const _trackMoment = currentMomentIndex.value
   const m = currentMoment.value
   const ann = inSessionAnnotations.value || []
-  if (!m?.timestamp || !sessionStartTime.value) {
+  const timerElapsed =
+    m &&
+    m.session_elapsed_seconds !== null &&
+    m.session_elapsed_seconds !== undefined &&
+    m.session_elapsed_seconds !== '' &&
+    Number.isFinite(Number(m.session_elapsed_seconds))
+      ? Math.max(0, Number(m.session_elapsed_seconds))
+      : null
+  if (!m || (timerElapsed === null && (!m.timestamp || !sessionStartTime.value))) {
     return { transcription: '', timeLabel: '—' }
   }
   let dur = sessionDurationSeconds.value
@@ -357,9 +380,14 @@ const selectedInSessionThought = computed(() => {
   if (!dur || dur <= 0) {
     return { transcription: '(Session duration unavailable; cannot map in-game thoughts.)', timeLabel: '—' }
   }
-  const actionTime = new Date(m.timestamp).getTime()
-  const start = sessionStartTime.value.getTime()
-  const elapsedSec = (actionTime - start) / 1000
+  let elapsedSec
+  if (timerElapsed !== null) {
+    elapsedSec = timerElapsed
+  } else {
+    const actionTime = new Date(m.timestamp).getTime()
+    const start = sessionStartTime.value.getTime()
+    elapsedSec = (actionTime - start) / 1000
+  }
   const pct = elapsedSec < 0 ? 0 : (elapsedSec / dur) * 100
   const bucket = checkpointIndexFromNearestAnchorPct(pct)
   const list = [...ann].sort((a, b) => (Number(a.checkpoint_index) || 0) - (Number(b.checkpoint_index) || 0))
@@ -917,7 +945,7 @@ onMounted(() => {
         <h2 class="panel-title">
           <template v-if="screenshotDisplayEntry">
             You are revisiting your action at
-            <span class="time-highlight">{{ formatTime(screenshotDisplayEntry.timestamp) }}</span>
+            <span class="time-highlight">{{ formatLogEntryTime(screenshotDisplayEntry) }}</span>
           </template>
           <template v-else>Session replay</template>
         </h2>
@@ -980,9 +1008,9 @@ onMounted(() => {
             :role="logEntryIsInteractive(entry) ? 'button' : undefined"
             :aria-label="
               !logEntryParticipantIsYou(entry)
-                ? 'Partner at ' + formatTime(entry.timestamp)
+                ? 'Partner at ' + formatLogEntryTime(entry)
                 : logEntryIsInteractive(entry)
-                  ? 'Your action at ' + formatTime(entry.timestamp)
+                  ? 'Your action at ' + formatLogEntryTime(entry)
                   : undefined
             "
             @click="onInteractionLogEntryClick(entry)"
@@ -995,7 +1023,7 @@ onMounted(() => {
                 class="log-annotated-indicator"
                 title="All questions answered for this action"
               >✓</span>
-              {{ formatTime(entry.timestamp) }}
+              {{ formatLogEntryTime(entry) }}
             </span>
             <span class="log-participant">{{ getDisplayName(entry, entry.participant_id === participantId) }}</span>
             <span
@@ -1011,7 +1039,7 @@ onMounted(() => {
         <template v-if="showAnnotationPanel">
         <h2 class="panel-title">
           You are annotating your action at
-          <span class="time-highlight">{{ currentMoment ? formatTime(currentMoment.timestamp) : '00:00' }}</span>
+          <span class="time-highlight">{{ currentMoment ? formatLogEntryTime(currentMoment) : '00:00' }}</span>
         </h2>
 
         <div class="progress-wrap">

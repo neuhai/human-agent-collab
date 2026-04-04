@@ -3,7 +3,7 @@ Timer Service: Manages countdown timers for experiment sessions.
 """
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 # Global timer storage: session_id -> TimerService instance
@@ -37,10 +37,17 @@ class TimerService:
             self.elapsed_while_paused += (now - self.paused_at)
             self.paused_at = None
         
-        # If starting fresh, set started_at
+        # If starting fresh, set started_at (session JSON uses same instant for post-hoc timelines)
         if self.started_at is None:
             self.started_at = now
-        
+            try:
+                from routes.session import set_session_started_at_when_timer_starts
+
+                iso_z = datetime.fromtimestamp(now, tz=timezone.utc).isoformat().replace('+00:00', 'Z')
+                set_session_started_at_when_timer_starts(self.session_id, iso_z)
+            except Exception as e:
+                print(f'[TimerService] set_session_started_at_when_timer_starts failed: {e}')
+
         self.is_running = True
         self.is_paused = False
         

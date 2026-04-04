@@ -321,6 +321,24 @@ def commit_session(session_key: str, session_dict: dict) -> None:
         print(f'[Session] DB persist: {e}')
 
 
+def set_session_started_at_when_timer_starts(session_timer_id: str, iso_z: str) -> None:
+    """
+    Set session started_at to the instant the countdown first begins (TimerService internal start).
+    Keeps post-hoc timelines and Session.Params.duration aligned with the participant-visible timer
+    when /start used delay_timer (popups / reading window before the clock runs).
+    """
+    for session_key, sess in sessions.items():
+        cand = sess.get('session_id') or session_key
+        if cand != session_timer_id:
+            continue
+        cur = sess.get('started_at')
+        if cur is None or (isinstance(cur, str) and not str(cur).strip()):
+            sess['started_at'] = iso_z
+            commit_session(session_key, sess)
+            print(f'[Session] started_at aligned to timer start for {session_timer_id}')
+        return
+
+
 def hydrate_sessions_from_db() -> None:
     """Load saved sessions into memory on startup."""
     try:
@@ -867,18 +885,18 @@ def start_session(session_identifier):
                     session_key_before = sid
                     break
         
-        # Determine started_at value
+        # started_at must match when the countdown actually runs (see TimerService.start +
+        # set_session_started_at_when_timer_starts). Do not set it here on first run — avoids
+        # skew when delay_timer is True (session is running before the clock starts).
         started_at_value = None
-        if found_before and not found_before.get('started_at'):
-            started_at_value = _utc_now_iso_z()
-        elif found_before:
+        if found_before and found_before.get('started_at'):
             started_at_value = found_before.get('started_at')
-        
+
         # Update status
         found_session, session_key, error_response, error_code = update_session_status(
-            session_identifier, 
+            session_identifier,
             'running',
-            started_at=started_at_value
+            started_at=started_at_value,
         )
         
         if error_response:

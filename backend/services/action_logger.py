@@ -52,6 +52,61 @@ def coalesce_client_timestamp(client_iso: Optional[str], max_skew_seconds: float
     return fallback
 
 
+def compute_session_elapsed_seconds(
+    session: Optional[Dict[str, Any]], timer_session_id: str
+) -> Optional[int]:
+    """
+    Elapsed session time as defined by the countdown timer: initial_duration - remaining_seconds.
+    Matches the participant-visible timer (annotation / pause time does not advance this).
+    """
+    if not session or not timer_session_id:
+        return None
+    if not session.get('started_at'):
+        return None
+
+    remaining: Optional[int] = None
+    initial: Optional[int] = None
+    try:
+        from services.timer_service import get_timer
+
+        t = get_timer(timer_session_id)
+        if t is not None:
+            remaining = int(t.get_remaining_seconds())
+            initial = int(t.initial_duration)
+    except Exception:
+        pass
+
+    if remaining is None:
+        raw = session.get('remaining_seconds')
+        if raw is not None:
+            try:
+                remaining = int(raw)
+            except (TypeError, ValueError):
+                remaining = None
+
+    if initial is None:
+        try:
+            from routes.participant import get_value_from_session_params
+
+            dm = get_value_from_session_params(session, 'Session.Params.duration')
+            if dm is None:
+                dm = session.get('duration_minutes')
+            if dm is None:
+                return None
+            initial = int(float(dm)) * 60
+        except Exception:
+            return None
+
+    if remaining is None or initial is None:
+        return None
+
+    try:
+        elapsed = int(initial) - int(remaining)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(elapsed, int(initial)))
+
+
 # Base directory for logs (relative to backend root)
 LOGS_BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
 UPLOADS_AUDIO_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'uploads', 'audio')
@@ -282,6 +337,11 @@ def log_action(
             'page': page,
             'experiment_type': experiment_type or '',
         }
+
+        if session is not None:
+            se = compute_session_elapsed_seconds(session, session_id)
+            if se is not None:
+                entry['session_elapsed_seconds'] = se
 
         if is_human:
             ann_mode = bool(session and is_annotation_enabled(session))
