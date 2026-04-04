@@ -48,6 +48,8 @@ services:
     volumes:
       - ./backend/logs:/app/logs
       - ./backend/uploads:/app/uploads
+      # export_session_data default --output-dir is /app/exports; mount so JSON appears on the host.
+      - ./backend/exports:/app/exports
     depends_on:
       postgres:
         condition: service_healthy
