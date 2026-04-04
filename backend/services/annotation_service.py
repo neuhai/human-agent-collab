@@ -23,6 +23,24 @@ ANNOTATION_CHECKPOINT_RANGES = [
 FORCED_TRIGGER_WINDOW_RATIO = 0.05
 
 
+def _parse_client_submitted_at_iso(raw: Optional[str]) -> Optional[datetime]:
+    """Parse browser ISO-8601 submit time; return UTC-aware datetime or None if invalid."""
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    if s.endswith('Z'):
+        s = s[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
 def is_annotation_enabled(session: dict) -> bool:
     """Check if annotation is enabled for this session."""
     exp_config = session.get('experiment_config', {})
@@ -244,6 +262,8 @@ def submit_annotation(
     participant_id: str,
     transcription: str,
     sessions_store: dict,
+    *,
+    submitted_at: Optional[str] = None,
 ) -> bool:
     """
     Record annotation submission. If all human participants have submitted, resume session.
@@ -260,6 +280,9 @@ def submit_annotation(
     submitted.add(participant_id)
     session['annotation_submitted'] = list(submitted)
 
+    effective_created = _parse_client_submitted_at_iso(submitted_at) or datetime.now(timezone.utc)
+    created_iso = effective_created.isoformat()
+
     # Store annotation data per participant
     annotations = session.get('annotation_data', {})
     if participant_id not in annotations:
@@ -267,7 +290,7 @@ def submit_annotation(
     annotations[participant_id].append({
         'checkpoint': checkpoint,
         'transcription': transcription,
-        'created_at': datetime.now(timezone.utc).isoformat(),
+        'created_at': created_iso,
     })
     session['annotation_data'] = annotations
     commit_session(session_key, session)
@@ -277,7 +300,11 @@ def submit_annotation(
         from services.db import persist_in_session_annotation
 
         persist_in_session_annotation(
-            actual_session_id, participant_id, checkpoint, transcription
+            actual_session_id,
+            participant_id,
+            checkpoint,
+            transcription,
+            created_at=effective_created,
         )
     except Exception as db_err:
         print(f'[Annotation] in_session DB persist: {db_err}')

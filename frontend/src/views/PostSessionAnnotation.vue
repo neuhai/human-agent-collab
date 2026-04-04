@@ -246,6 +246,7 @@ function formatTime(ts) {
   if (!ts) return '00:00'
   try {
     const d = new Date(ts)
+    if (Number.isNaN(d.getTime())) return '—'
     if (sessionStartTime.value) {
       const startMs = sessionStartTime.value.getTime()
       const diff = d.getTime() - startMs

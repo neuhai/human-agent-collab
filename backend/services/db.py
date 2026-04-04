@@ -268,19 +268,24 @@ def persist_in_session_annotation(
     participant_id: str,
     checkpoint_index: int,
     transcription: str,
+    created_at: Optional[datetime] = None,
 ) -> None:
     if not is_db_configured():
         return
     if not session_id or not participant_id or not transcription:
         return
     SessionLocal = get_session_factory()
-    now = datetime.now(timezone.utc)
+    ts = created_at if created_at is not None else datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    else:
+        ts = ts.astimezone(timezone.utc)
     row = InSessionAnnotationRow(
         session_id=session_id,
         participant_id=participant_id,
         checkpoint_index=int(checkpoint_index),
         transcription=transcription,
-        created_at=now,
+        created_at=ts,
     )
     with SessionLocal() as db:
         db.add(row)

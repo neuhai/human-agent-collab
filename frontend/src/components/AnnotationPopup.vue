@@ -100,7 +100,10 @@ const handleSubmit = async () => {
   if (!canSubmit.value) return
   isSubmitting.value = true
   try {
-    emit('submit', transcription.value.trim())
+    emit('submit', {
+      transcription: transcription.value.trim(),
+      submitted_at: new Date().toISOString()
+    })
   } finally {
     isSubmitting.value = false
   }

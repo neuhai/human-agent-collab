@@ -6,10 +6,11 @@ import AnnotationPopup from '../components/AnnotationPopup.vue'
 const showPopup = ref(false)
 const lastSubmit = ref('')
 
-const onSubmit = (transcription) => {
-  lastSubmit.value = transcription
+const onSubmit = (payload) => {
+  const text = typeof payload === 'string' ? payload : (payload?.transcription || '')
+  lastSubmit.value = text
   showPopup.value = false
-  console.log('[AnnotationTest] Submitted:', transcription)
+  console.log('[AnnotationTest] Submitted:', text, typeof payload === 'object' ? payload?.submitted_at : '')
 }
 </script>
 

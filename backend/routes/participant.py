@@ -1530,6 +1530,9 @@ def submit_annotation(session_identifier, participant_id):
         transcription = (data.get('transcription') or '').strip()
         if not transcription:
             return jsonify({'success': False, 'error': 'transcription is required'}), 400
+        submitted_at = data.get('submitted_at')
+        if submitted_at is not None and not isinstance(submitted_at, str):
+            submitted_at = None
 
         session_key, found_session = find_session_by_identifier(session_identifier)
         if not found_session:
@@ -1544,7 +1547,14 @@ def submit_annotation(session_identifier, participant_id):
             return jsonify({'success': False, 'error': 'Only human participants can submit annotations'}), 403
 
         from services.annotation_service import submit_annotation as annotation_submit
-        resumed = annotation_submit(session_key, found_session, participant_id, transcription, sessions)
+        resumed = annotation_submit(
+            session_key,
+            found_session,
+            participant_id,
+            transcription,
+            sessions,
+            submitted_at=submitted_at,
+        )
         return jsonify({'success': True, 'resumed': resumed}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

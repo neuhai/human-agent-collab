@@ -1590,7 +1590,13 @@ const startSessionTimer = async () => {
 }
 
 // Submit annotation for in-session checkpoint
-const submitAnnotation = async (transcription) => {
+const submitAnnotation = async (payload) => {
+  const transcription =
+    typeof payload === 'string' ? payload.trim() : String(payload?.transcription || '').trim()
+  const submittedAt =
+    typeof payload === 'object' && payload?.submitted_at
+      ? payload.submitted_at
+      : new Date().toISOString()
   const sessionIdentifier = sessionName.value || sessionId.value
   const participantId = sessionStorage.getItem('participant_id')
   if (!sessionIdentifier || !participantId) {
@@ -1602,7 +1608,7 @@ const submitAnnotation = async (transcription) => {
     const response = await fetch(`/api/sessions/${encodedSessionId}/participants/${participantId}/submit_annotation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcription })
+      body: JSON.stringify({ transcription, submitted_at: submittedAt })
     })
     const data = await response.json()
     if (data.success) {
