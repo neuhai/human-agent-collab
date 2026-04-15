@@ -147,6 +147,85 @@ const txtContent = ref('')
 const txtLoading = ref(false)
 const txtError = ref(null)
 
+const getMapIdentity = (mapObj) => {
+  if (!mapObj) return null
+  return mapObj.id ?? mapObj.filename ?? mapObj.file_path ?? null
+}
+
+const getDrawingPersistKey = () => {
+  if (!props.showToolbox || !canDraw.value || !props.map) return null
+  const mapIdentity = getMapIdentity(props.map)
+  if (!mapIdentity) return null
+  const sessionId = sessionStorage.getItem('session_id') || sessionStorage.getItem('session_code') || 'anon'
+  const participantId = sessionStorage.getItem('participant_id') || 'anon'
+  return `map_drawing:${sessionId}:${participantId}:${String(mapIdentity)}:${mapType.value}`
+}
+
+const persistDrawingLocally = () => {
+  const key = getDrawingPersistKey()
+  if (!key) return
+  try {
+    if (mapType.value === 'txt') {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          mapType: 'txt',
+          filledCells: [...filledCells.value]
+        })
+      )
+    } else if (mapType.value === 'image' && canvasRef.value) {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          mapType: 'image',
+          canvasDataUrl: canvasRef.value.toDataURL('image/png')
+        })
+      )
+    }
+  } catch {
+    /* ignore local persistence errors */
+  }
+}
+
+const restoreTxtDrawingLocally = () => {
+  const key = getDrawingPersistKey()
+  if (!key || mapType.value !== 'txt') return
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    const saved = Array.isArray(parsed?.filledCells) ? parsed.filledCells : null
+    if (!saved) return
+    filledCells.value = new Set(saved)
+    txtUndoStack.value = [new Set(), new Set(filledCells.value)]
+  } catch {
+    /* ignore local restore errors */
+  }
+}
+
+const restoreImageDrawingLocally = () => {
+  const key = getDrawingPersistKey()
+  if (!key || mapType.value !== 'image' || !canvasRef.value || !canvasCtx.value) return
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    const dataUrl = parsed?.canvasDataUrl
+    if (!dataUrl || typeof dataUrl !== 'string') return
+    const img = new Image()
+    img.onload = () => {
+      if (!canvasCtx.value || !canvasRef.value) return
+      canvasCtx.value.clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
+      canvasCtx.value.drawImage(img, 0, 0, canvasRef.value.width, canvasRef.value.height)
+      canvasUndoStack.value = []
+      pushCanvasUndoState()
+    }
+    img.src = dataUrl
+  } catch {
+    /* ignore local restore errors */
+  }
+}
+
 const resetDrawing = () => {
   filledCells.value = new Set()
   txtUndoStack.value = [new Set()]
@@ -215,6 +294,7 @@ const initCanvas = () => {
     canvasImage.value = img
     canvasUndoStack.value = []
     pushCanvasUndoState()
+    restoreImageDrawingLocally()
   }
   if (img.complete) onLoad()
   else img.addEventListener('load', onLoad)
@@ -382,6 +462,7 @@ const undoLast = () => {
   } else {
     return
   }
+  persistDrawingLocally()
   scheduleSyncMapProgress()
   logMapAction('map_tool_click', 'undo')
 }
@@ -391,7 +472,10 @@ let syncTimeout = null
 const scheduleSyncMapProgress = () => {
   if (!props.showToolbox || !canDraw.value || !props.map) return
   if (syncTimeout) clearTimeout(syncTimeout)
-  syncTimeout = setTimeout(syncMapProgress, 300)
+  syncTimeout = setTimeout(() => {
+    persistDrawingLocally()
+    void syncMapProgress()
+  }, 300)
 }
 
 const syncMapProgress = async () => {
@@ -435,6 +519,7 @@ const loadTxtContent = async () => {
     if (!res.ok) throw new Error(`Failed to load map (${res.status})`)
     txtContent.value = await res.text()
     txtUndoStack.value = [new Set()]
+    restoreTxtDrawingLocally()
   } catch (e) {
     txtError.value = e?.message || 'Failed to load map'
     txtContent.value = ''
@@ -443,10 +528,10 @@ const loadTxtContent = async () => {
   }
 }
 
-watch(() => props.map?.id ?? null, (newId, oldId) => {
-  // Only reset when map actually changes (different id), not when object reference changes
+watch(() => getMapIdentity(props.map), (newMapIdentity, oldMapIdentity) => {
+  // Only reset when map identity actually changes, not when object reference changes
   // (e.g. from participants_updated broadcast after syncMapProgress)
-  if (oldId !== undefined && newId === oldId) return
+  if (oldMapIdentity !== undefined && newMapIdentity === oldMapIdentity) return
   resetDrawing()
   lastCell.value = null
   txtContent.value = ''
