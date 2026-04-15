@@ -113,6 +113,21 @@ def assign_tasks(participant: dict, session: dict, param_cfg: Optional[dict] = N
     return [random.choice(available) for _ in range(shapes_order)]
 
 
+def route_pixel_ratio_from_map_filename(filename: Optional[str]) -> Optional[float]:
+    """
+    Ground-truth route / map pixel ratio for Map Task checkpoints (filename convention).
+    Check map4 before map3 so names like 'x_map4_y' are unambiguous.
+    """
+    if not filename or not isinstance(filename, str):
+        return None
+    lower = filename.lower()
+    if "map4" in lower:
+        return 0.02958359489432936
+    if "map3" in lower:
+        return 0.023551998326009627
+    return None
+
+
 def assign_map_for_maptask(participant: dict, session: dict, param_cfg: Optional[dict] = None) -> Optional[dict]:
     """
     Map Task: assign the appropriate map to the participant based on their role.
@@ -147,6 +162,12 @@ def assign_map_for_maptask(participant: dict, session: dict, param_cfg: Optional
                 safe = secure_filename(str(fn))
                 if safe:
                     out['file_path'] = f'/api/maps/{safe}'
+            name_for_ratio = out.get('original_filename') or out.get('filename') or ''
+            rpr = out.get('route_pixel_ratio')
+            if rpr is None:
+                parsed = route_pixel_ratio_from_map_filename(str(name_for_ratio))
+                if parsed is not None:
+                    out['route_pixel_ratio'] = parsed
             return out
     return None
 

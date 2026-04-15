@@ -28,72 +28,104 @@ const annotationFinished = ref(false)
 const SECTIONS = [
   {
     id: 'q1',
-    category: 'Grounding State',
-    question: 'At this moment, what do you think you and your partner are trying to do together?',
+    category: 'Task Model',
+    question: 'At this moment, my partner and I were:',
     labels: [
-      { id: 'g1', text: 'We are building a shared understanding' },
-      { id: 'g2', text: 'We are deciding on the next step together' },
-      { id: 'g3', text: 'We are checking that we understood each other' },
-      { id: 'g4', text: 'We are resolving a misunderstanding' },
-      { id: 'g5', text: 'I am not sure what we are trying to do right now' },
+      { id: 't1', text: 'Still figuring out what we needed to do' },
+      { id: 't2', text: 'Working toward a shared understanding' },
+      { id: 't3', text: 'Clear on what to do and working on it' },
+      { id: 't4', text: 'Something was unclear and we were working it out' },
       { id: 'other', text: 'Other' },
     ],
   },
+
   {
     id: 'q2',
-    category: 'Perceived Partner State',
-    question: "At this moment, what was your impression of your partner's understanding?",
-    hint: 'This is about your impression, not what they were actually thinking.',
+    category: 'Partner Model',
+    question: 'At this moment, I thought my partner:',
     labels: [
-      { id: 'p1', text: "I'm confident they understood as their action shows" },
-      { id: 'p2', text: "I'm concerned they misunderstood as their action shows" },
-      { id: 'p3', text: "I'm sensing they are unsure as they are hesitating" },
-      { id: 'p4', text: "I'm unable to tell what they are thinking right now" },
+      { id: 'p1', text: 'Understood the situation and we were on the same page' },
+      { id: 'p2', text: 'Probably understood our situation but I was not fully sure' },
+      { id: 'p3', text: 'Is waiting for more information to understand the situation' },
+      { id: 'p4', text: 'Misunderstood and we were not aligned' },
+      { id: 'p5', text: 'Gave no clear signal either way' },
       { id: 'other', text: 'Other' },
     ],
   },
+
   {
     id: 'q3',
-    category: 'Self-Reasoning',
-    question: 'What was the main reason behind your action at this moment?',
+    category: 'Self Model',
+    question: 'At this moment, my action was driven by:',
     labels: [
-      { id: 'r1', text: "I'm moving forward as we have shared understanding" },
-      { id: 'r2', text: "I'm clarifying as there is a gap in our shared understanding" },
-      { id: 'r3', text: "I'm repairing as I noticed a mistake" },
-      { id: 'r4', text: "I'm verifying as I want to make sure we are aligned" },
+      { id: 'r1', text: 'Executing a plan we already agreed on' },
+      { id: 'r2', text: 'Exploring on my own to gather information' },
+      { id: 'r3', text: 'Confirming the situation with my partner' },
+      { id: 'r4', text: 'Grounding by sharing or requesting information to align' },
+      { id: 'r5', text: 'Repairing a mistake or misunderstanding' },
+      { id: 'r6', text: 'Waiting for more information' },
       { id: 'other', text: 'Other' },
     ],
   },
+
   {
     id: 'q4',
     category: 'Alignment',
-    question: 'Do you think you and your partner are on the same page?',
+    question: 'At this moment, my partner and I were on the same page:',
     kind: 'yes_no_reasons',
+    reasons: {
+      no: [
+        { id: 'n1', text: 'Different understanding of the task goal' },
+        { id: 'n2', text: 'Different understanding of the current state' },
+        { id: 'n3', text: 'One of us was missing key information' },
+        { id: 'n4', text: 'Communication was unclear or ambiguous' },
+        { id: 'n5', text: 'Technical or interface issue got in the way' },
+      ],
+    },
   },
 ]
 
 const Q4_REASON_OTHER = 'Other'
 
 const Q4_REASONS = [
-  'Goal misunderstanding',
-  'Unclear communication',
-  'Poor coordination',
-  'Unexpected actions / errors',
-  'Low trust in partner',
-  'Interface / context issues',
+  ...(SECTIONS.find((s) => s.id === 'q4')?.reasons?.no || []).map((r) => r.text),
   Q4_REASON_OTHER,
 ]
+
+const RECORD_PHASE_INSTRUCTION =
+  'Please briefly answer all four questions in one recording.\nClick the button to start recording.'
+
+/** One combined explanation (transcribed) for all four questions per moment */
+const MOMENT_EXPLAIN_KEY = 'momentExplanationTranscript'
 
 const stepIndex = ref(0)
 const currentSection = computed(() => SECTIONS[stepIndex.value] || null)
 
+/** Bold the clause after this prefix in each section question (q1–q4). */
+const SECTION_QUESTION_PREFIX = 'At this moment, '
+const currentSectionQuestionParts = computed(() => {
+  const q = currentSection.value?.question
+  if (!q) return null
+  const s = String(q)
+  if (s.startsWith(SECTION_QUESTION_PREFIX)) {
+    return { lead: SECTION_QUESTION_PREFIX, rest: s.slice(SECTION_QUESTION_PREFIX.length) }
+  }
+  return { plain: s }
+})
+
+/** 'record' = show all 4 questions + single recording; 'answer' = one question at a time */
+const annotationPhase = ref('record')
+
 const annotations = ref({})
 const selectedLabelId = ref('')
-const transcriptText = ref('')
-/** Free text for the "Other" choice only; separate from explanation transcript */
+/** Free text for the "Other" choice only */
 const otherLabelText = ref('')
-/** After at least one successful record+transcribe on this step; also true when reloading saved transcript */
-const transcriptUiShown = ref(false)
+/** Combined explanation for the four questions (record phase) */
+const explanationTranscript = ref('')
+/** Matches AnnotationPopup: after a successful recording, show re-record affordance */
+const hasRecordedExplanation = ref(false)
+/** After Confirm on an answer step: big checkmark before flip to next */
+const showStepSuccess = ref(false)
 const q4Value = ref(null)
 const q4Reasons = ref([])
 /** Free text when Q4 "Other" reason is selected */
@@ -104,11 +136,22 @@ const isLabelQuestionStep = computed(
   () => !!currentSection.value && currentSection.value.kind !== 'yes_no_reasons',
 )
 
+/** Per moment: 1 combined explanation step + 4 choice steps */
+const STEPS_PER_MOMENT = 1 + SECTIONS.length
+
 const currentProgressPct = computed(() => {
-  const total = annotationMoments.value.length * SECTIONS.length
+  const moments = annotationMoments.value.length
+  const total = moments * STEPS_PER_MOMENT
   if (!total) return 0
-  return ((currentMomentIndex.value * SECTIONS.length + stepIndex.value + 1) / total) * 100
+  const phaseOffset = annotationPhase.value === 'record' ? 0 : 1 + stepIndex.value
+  const done = currentMomentIndex.value * STEPS_PER_MOMENT + phaseOffset + 1
+  return (done / total) * 100
 })
+
+/** 1 = record step; 2–5 = question steps */
+const progressSubstepIndex = computed(() =>
+  annotationPhase.value === 'record' ? 1 : 2 + stepIndex.value,
+)
 
 /** Full merged log for the interaction table — do not clip by configured session duration; that hid late send_message / map actions when the session ran past duration or clocks skewed. Researcher Conversations uses full session.messages; this should match. */
 const visibleMergedLogs = computed(() => {
@@ -149,6 +192,22 @@ const momentIndexByActionId = computed(() => {
 function getMomentIndexForLogEntry(entry) {
   if (!entry?.action_id) return -1
   return momentIndexByActionId.value.get(entry.action_id) ?? -1
+}
+
+/** Merge legacy per-question transcripts into momentExplanationTranscript when loading old saves */
+function migrateMomentAnnotation(saved) {
+  if (!saved || typeof saved !== 'object') return {}
+  const out = { ...saved }
+  const existing = String(out[MOMENT_EXPLAIN_KEY] || '').trim()
+  if (existing) return out
+  const parts = []
+  for (const s of SECTIONS) {
+    if (s.kind === 'yes_no_reasons') continue
+    const t = String(out[`${s.id}Transcript`] || '').trim()
+    if (t) parts.push(t)
+  }
+  if (parts.length) out[MOMENT_EXPLAIN_KEY] = parts.join('\n\n')
+  return out
 }
 
 function logEntryParticipantIsYou(entry) {
@@ -440,7 +499,6 @@ const prevAnswerForStep = computed(() => {
   return {
     text,
     labelId: prev[`${sec.id}LabelId`] || '',
-    transcript: prev[`${sec.id}Transcript`] || '',
     otherText: (prev[`${sec.id}OtherText`] || '').trim(),
     isQ4: false,
   }
@@ -461,12 +519,18 @@ const canConfirmCurrentStep = computed(() => {
     }
     return true
   }
-  if (!selectedLabelId.value || !transcriptText.value.trim()) return false
+  if (!selectedLabelId.value) return false
   if (selectedLabelId.value === 'other' && !otherLabelText.value.trim()) return false
   return true
 })
 
-const canRecordExplanation = computed(() => !!selectedLabelId.value)
+const canConfirmExplanationPhase = computed(
+  () =>
+    explanationTranscript.value.trim().length > 0 &&
+    !isTranscribing.value &&
+    !isRecording.value,
+)
+
 const canRecordOtherLabel = computed(
   () => isLabelQuestionStep.value && selectedLabelId.value === 'other',
 )
@@ -489,22 +553,17 @@ function selectLabel(labelId) {
       otherLabelText.value = ''
     }
     selectedLabelId.value = labelId
-    if (labelId !== 'other') {
-      transcriptText.value = ''
-      transcriptUiShown.value = false
-    } else {
-      transcriptUiShown.value = false
-    }
   } else {
     selectedLabelId.value = labelId
   }
 }
 
 function loadStepStateFromSaved() {
+  if (annotationPhase.value === 'record') return
   const m = currentMoment.value
   const sec = currentSection.value
   if (!m || !sec) return
-  const saved = annotations.value[m.action_id] || {}
+  const saved = migrateMomentAnnotation(annotations.value[m.action_id] || {})
   if (sec.kind === 'yes_no_reasons') {
     q4Value.value = saved.q4 === 'yes' || saved.q4 === 'no' ? saved.q4 : null
     q4Reasons.value = Array.isArray(saved.q4Reasons) ? [...saved.q4Reasons] : []
@@ -515,22 +574,28 @@ function loadStepStateFromSaved() {
   const savedText = (saved[sec.id] || '').trim()
   const otKey = `${sec.id}OtherText`
   selectedLabelId.value = savedLabelId
-  transcriptText.value = saved[`${sec.id}Transcript`] || ''
   otherLabelText.value = typeof saved[otKey] === 'string' ? saved[otKey] : ''
-  transcriptUiShown.value = !!transcriptText.value.trim()
   if (!selectedLabelId.value && savedText && sec.labels) {
     const byText = sec.labels.find((x) => x.text === savedText)
     if (byText) selectedLabelId.value = byText.id
   }
-  if (
-    selectedLabelId.value === 'other' &&
-    !otherLabelText.value.trim() &&
-    transcriptText.value.trim() &&
-    !(saved[otKey] || '').toString().trim()
-  ) {
-    otherLabelText.value = transcriptText.value
-    transcriptText.value = ''
-    transcriptUiShown.value = false
+}
+
+function syncPhaseFromSavedMoment() {
+  const m = currentMoment.value
+  if (!m) return
+  const raw = annotations.value[m.action_id] || {}
+  const saved = migrateMomentAnnotation({ ...raw })
+  annotations.value[m.action_id] = saved
+  const ex = String(saved[MOMENT_EXPLAIN_KEY] || '').trim()
+  explanationTranscript.value = ex
+  hasRecordedExplanation.value = !!ex
+  if (!ex) {
+    annotationPhase.value = 'record'
+    stepIndex.value = 0
+  } else {
+    annotationPhase.value = 'answer'
+    stepIndex.value = firstIncompleteStepIndexForSaved(saved)
   }
 }
 
@@ -540,14 +605,12 @@ function loadCurrentMomentState() {
   if (!annotations.value[m.action_id]) {
     annotations.value[m.action_id] = {}
   }
-  stepIndex.value = 0
   selectedLabelId.value = ''
-  transcriptText.value = ''
   otherLabelText.value = ''
-  transcriptUiShown.value = false
   q4Value.value = null
   q4Reasons.value = []
   q4OtherText.value = ''
+  syncPhaseFromSavedMoment()
   loadStepStateFromSaved()
 }
 
@@ -562,6 +625,7 @@ watch(q4Value, (v) => {
 })
 
 function saveCurrentStepAnnotation() {
+  if (annotationPhase.value === 'record') return
   const m = currentMoment.value
   const sec = currentSection.value
   if (!m || !sec) return
@@ -582,7 +646,6 @@ function saveCurrentStepAnnotation() {
     [sec.id]: labelText,
     [`${sec.id}LabelId`]: selectedLabelId.value,
     [otKey]: selectedLabelId.value === 'other' ? otherLabelText.value.trim() : '',
-    [`${sec.id}Transcript`]: transcriptText.value.trim(),
   }
 }
 
@@ -609,11 +672,48 @@ function moveToNextStepOrMoment() {
   annotationFinished.value = true
 }
 
+function saveMomentExplanationOnly() {
+  const m = currentMoment.value
+  if (!m) return
+  const prev = annotations.value[m.action_id] || {}
+  annotations.value[m.action_id] = {
+    ...prev,
+    [MOMENT_EXPLAIN_KEY]: explanationTranscript.value.trim(),
+  }
+}
+
+/** Persist in-progress UI when jumping moments / screenshots (avoid saving label step while still on record phase). */
+function persistAnnotationUiBeforeLeave() {
+  if (annotationPhase.value === 'record') {
+    if (explanationTranscript.value.trim()) saveMomentExplanationOnly()
+    return
+  }
+  saveCurrentStepAnnotation()
+}
+
+async function confirmExplanationPhase() {
+  if (!canConfirmExplanationPhase.value) return
+  saveMomentExplanationOnly()
+  const ok = await saveAnnotationsToFile()
+  if (!ok) return
+  annotationPhase.value = 'answer'
+  stepIndex.value = 0
+  loadStepStateFromSaved()
+}
+
+function delay(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
 async function confirmCurrentStep() {
   if (!canConfirmCurrentStep.value) return
   saveCurrentStepAnnotation()
   const ok = await saveAnnotationsToFile()
   if (!ok) return
+  showStepSuccess.value = true
+  await delay(750)
+  showStepSuccess.value = false
+  await delay(80)
   moveToNextStepOrMoment()
 }
 
@@ -636,8 +736,6 @@ function applySameAsLastMomentToForm() {
   }
   selectedLabelId.value = prev.labelId || ''
   otherLabelText.value = prev.otherText || ''
-  transcriptText.value = prev.transcript || ''
-  transcriptUiShown.value = !!transcriptText.value.trim()
 }
 
 function loadData() {
@@ -668,7 +766,12 @@ function loadData() {
           ? Number(data.session_duration_seconds)
           : null
       if (data.saved_annotations && typeof data.saved_annotations === 'object') {
-        annotations.value = annotationsPayloadForSave(data.saved_annotations)
+        const raw = annotationsPayloadForSave(data.saved_annotations)
+        const migrated = {}
+        for (const [k, v] of Object.entries(raw)) {
+          migrated[k] = migrateMomentAnnotation(v)
+        }
+        annotations.value = migrated
       }
       if (data.session_started_at) {
         const d = new Date(data.session_started_at)
@@ -732,20 +835,23 @@ function isSectionCompleteForSaved(saved, sec) {
     return true
   }
   const label = (saved[`${sec.id}LabelId`] || '').trim()
-  const transcript = (saved[`${sec.id}Transcript`] || '').trim()
-  if (!label || !transcript) return false
+  if (!label) return false
   if (label === 'other' && !(saved[`${sec.id}OtherText`] || '').trim()) return false
   return true
 }
 
-function isMomentAnnotationComplete(saved) {
+function isMomentAnnotationComplete(rawSaved) {
+  const saved = migrateMomentAnnotation(rawSaved || {})
+  if (!(saved[MOMENT_EXPLAIN_KEY] || '').trim()) return false
   for (const s of SECTIONS) {
     if (!isSectionCompleteForSaved(saved, s)) return false
   }
   return true
 }
 
-function firstIncompleteStepIndexForSaved(saved) {
+function firstIncompleteStepIndexForSaved(rawSaved) {
+  const saved = migrateMomentAnnotation(rawSaved || {})
+  if (!(saved[MOMENT_EXPLAIN_KEY] || '').trim()) return 0
   for (let i = 0; i < SECTIONS.length; i++) {
     if (!isSectionCompleteForSaved(saved, SECTIONS[i])) return i
   }
@@ -793,7 +899,7 @@ async function onInteractionLogEntryClick(entry) {
   const ownMi = getMomentIndexForLogEntry(entry)
   if (ownMi < 0 && navIdx < 0) return
 
-  saveCurrentStepAnnotation()
+  persistAnnotationUiBeforeLeave()
   const ok = await saveAnnotationsToFile()
   if (!ok) return
 
@@ -816,7 +922,7 @@ async function screenshotNavDelta(delta) {
   const next = Math.min(list.length - 1, Math.max(0, screenshotCarouselIndex.value + delta))
   if (next === screenshotCarouselIndex.value) return
   const entry = list[next]
-  saveCurrentStepAnnotation()
+  persistAnnotationUiBeforeLeave()
   const ok = await saveAnnotationsToFile()
   if (!ok) return
   screenshotCarouselIndex.value = next
@@ -829,6 +935,10 @@ async function screenshotNavDelta(delta) {
 
 async function toggleRecording(target) {
   if (isTranscribing.value) return
+  if (target === 'moment_explain' && hasRecordedExplanation.value && !isRecording.value) {
+    explanationTranscript.value = ''
+    hasRecordedExplanation.value = false
+  }
   if (isRecording.value) {
     if (mediaRecorder.value && mediaRecorder.value.state !== 'inactive') {
       mediaRecorder.value.stop()
@@ -859,12 +969,16 @@ async function toggleRecording(target) {
           q4OtherText.value = text
         } else if (target === 'other_label') {
           otherLabelText.value = text
-        } else if (target === currentSection.value?.id) {
-          transcriptText.value = text
-          transcriptUiShown.value = true
+        } else if (target === 'moment_explain') {
+          explanationTranscript.value = text
+          hasRecordedExplanation.value = true
         }
       } catch (err) {
         console.error('[PostAnnotation] Transcribe error:', err)
+        if (target === 'moment_explain') {
+          explanationTranscript.value = '[Transcription failed. Please try again.]'
+          hasRecordedExplanation.value = true
+        }
       } finally {
         isTranscribing.value = false
       }
@@ -1045,7 +1159,11 @@ onMounted(() => {
         <div class="progress-wrap">
           <div class="progress-label-row">
             <span>Moment {{ currentMomentIndex + 1 }} / {{ annotationMoments.length }}</span>
-            <span>Question {{ stepIndex + 1 }} / {{ SECTIONS.length }}</span>
+            <span
+              >Step {{ progressSubstepIndex }} / {{ STEPS_PER_MOMENT
+              }}<template v-if="annotationPhase === 'record'"> · Record</template
+              ><template v-else> · Question {{ stepIndex + 1 }} / {{ SECTIONS.length }}</template></span
+            >
           </div>
           <div class="progress-track">
             <div class="progress-fill" :style="{ width: `${currentProgressPct}%` }"></div>
@@ -1057,156 +1175,210 @@ onMounted(() => {
           <p>{{ selectedInSessionThought.transcription || '(No thoughts recorded)' }}</p>
         </div>
 
-        <div v-if="currentSection" class="question-block">
-          <div class="question-category">{{ currentSection.category }}</div>
-          <label>{{ currentSection.question }}</label>
-          <p v-if="currentSection.hint" class="question-note">{{ currentSection.hint }}</p>
+        <div class="annotation-workspace">
+          <transition name="phase-flip" mode="out-in">
+            <div v-if="annotationPhase === 'record'" key="phase-record" class="phase-block record-phase">
+              <div class="all-questions-overview">
+                <p class="overview-instruction">Please briefly answer the following questions.</p>
+                <div class="overview-questions-text">At this moment:<br />
+1. What are you and your partner trying to do?<br />
+2. What do you think your partner was doing?<br />
+3. Why did you take this action?</div>
+              </div>
+              <p class="record-phase-instruction">{{ RECORD_PHASE_INSTRUCTION }}</p>
 
-          <template v-if="isLabelQuestionStep && currentSection.labels">
-            <div
-              v-for="label in currentSection.labels"
-              :key="label.id"
-              class="label-option"
-              :class="{ selected: selectedLabelId === label.id }"
-              @click="selectLabel(label.id)"
-            >
-              <div class="radio-dot" :class="{ selected: selectedLabelId === label.id }"></div>
-              <div class="label-text">{{ label.text }}</div>
-              <div
-                v-if="label.id === 'other'"
-                class="other-inline-row"
-                @click.stop
-              >
-                <input
-                  v-model="otherLabelText"
-                  type="text"
-                  class="other-inline-input"
-                  placeholder="Please specify"
-                  :disabled="selectedLabelId !== 'other'"
-                />
+              <div class="moment-explain-recording">
                 <button
                   type="button"
-                  class="btn-voice-inline"
-                  @click.stop="handleUpdate('other_label')"
-                  :disabled="isTranscribing || !canRecordOtherLabel"
+                  class="record-btn-circle"
+                  :class="{ recording: isRecording && recordingTarget === 'moment_explain', 'has-recorded': hasRecordedExplanation }"
+                  :disabled="isTranscribing"
+                  :title="hasRecordedExplanation ? 'Re-record' : (isRecording && recordingTarget === 'moment_explain' ? 'Stop' : 'Record')"
+                  @click="handleUpdate('moment_explain')"
                 >
-                  <span v-if="isRecording && recordingTarget === 'other_label'" class="recording-indicator">●</span>
-                  <i v-else class="fa-solid fa-microphone"></i>
+                  <i
+                    v-if="isRecording && recordingTarget === 'moment_explain'"
+                    class="fa-solid fa-microphone record-circle-icon"
+                  ></i>
+                  <i
+                    v-else-if="hasRecordedExplanation"
+                    class="fa-solid fa-arrow-rotate-left record-circle-icon"
+                  ></i>
+                  <i v-else class="fa-solid fa-microphone record-circle-icon"></i>
                 </button>
+
+                <div v-if="isRecording && recordingTarget === 'moment_explain'" class="sound-wave">
+                  <span v-for="wi in 12" :key="wi" class="wave-bar"></span>
+                </div>
+
+                <div
+                  v-if="isTranscribing && recordingTarget === 'moment_explain'"
+                  class="transcribing-hint"
+                >
+                  Transcribing…
+                </div>
+
+                <div
+                  v-if="hasRecordedExplanation && !(isTranscribing && recordingTarget === 'moment_explain')"
+                  class="moment-explain-transcription"
+                >
+                  <label class="moment-explain-label">Your response (editable)</label>
+                  <textarea
+                    v-model="explanationTranscript"
+                    class="transcription-input"
+                    rows="4"
+                    placeholder="Edit your response…"
+                  ></textarea>
+                  <div class="action-row action-row--record-confirm">
+                    <button
+                      type="button"
+                      class="btn-confirm-main"
+                      :disabled="!canConfirmExplanationPhase"
+                      @click="confirmExplanationPhase"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div v-if="selectedLabelId" class="recording-row">
-              <button
-                type="button"
-                class="btn-record"
-                @click="handleUpdate(currentSection.id)"
-                :disabled="isTranscribing || !canRecordExplanation"
-                :class="{ active: canRecordExplanation, disabled: !canRecordExplanation }"
-              >
-                <span v-if="isRecording && recordingTarget === currentSection.id" class="recording-indicator">●</span>
-                <i v-else class="fa-solid fa-microphone"></i>
-                {{
-                  isRecording && recordingTarget === currentSection.id
-                    ? ' Recording - tap to stop'
-                    : transcriptText
-                      ? ' Re-record explanation'
-                      : (canRecordExplanation ? ' Tap to record explanation' : ' Select a label first')
-                }}
-              </button>
-            </div>
-
-            <div
-              v-if="
-                isTranscribing &&
-                (recordingTarget === 'other_label' ||
-                  (currentSection && recordingTarget === currentSection.id))
-              "
-              class="transcribing-hint"
-            >
-              Transcribing…
-            </div>
-
-            <div v-if="transcriptUiShown" class="transcription-box">
-              <span>Explanation (editable)</span>
-              <textarea
-                v-model="transcriptText"
-                class="transcription-input"
-                rows="2"
-                placeholder="Edit your explanation transcription if needed."
-              ></textarea>
-            </div>
-          </template>
-
-          <template v-else-if="isQ4Step">
-            <div class="q4-options">
-              <label class="radio-option">
-                <input v-model="q4Value" type="radio" value="yes" />
-                Yes
-              </label>
-              <label class="radio-option">
-                <input v-model="q4Value" type="radio" value="no" />
-                No
-              </label>
-            </div>
-            <div v-if="q4Value === 'no'" class="q4-reasons">
-              <div class="q4-reasons-hint">Select one or more reasons:</div>
-              <label v-for="r in Q4_REASONS" :key="r" class="checkbox-option">
-                <input type="checkbox" :checked="q4Reasons.includes(r)" @change="toggleQ4Reason(r)" />
-                {{ r }}
-              </label>
-            </div>
-            <div v-if="q4Value === 'no' && q4Reasons.includes(Q4_REASON_OTHER)" class="q4-other-block">
-              <label class="q4-other-label">Please specify your &quot;Other&quot; reason (type or record):</label>
-              <div class="recording-row">
-                <button
-                  type="button"
-                  class="btn-record"
-                  @click="handleUpdate('q4_other')"
-                  :disabled="isTranscribing || !canRecordQ4Other"
-                  :class="{ active: canRecordQ4Other, disabled: !canRecordQ4Other }"
-                >
-                  <span v-if="isRecording && recordingTarget === 'q4_other'" class="recording-indicator">●</span>
-                  <i v-else class="fa-solid fa-microphone"></i>
-                  {{
-                    isRecording && recordingTarget === 'q4_other'
-                      ? ' Recording - tap to stop'
-                      : q4OtherText
-                        ? ' Re-record'
-                        : canRecordQ4Other
-                          ? ' Tap to record'
-                          : ' Select Other above first'
-                  }}
-                </button>
+            <div v-else key="phase-answer" class="phase-block answer-phase">
+              <div v-if="showStepSuccess" class="step-success-overlay" aria-hidden="true">
+                <div class="step-success-check">
+                  <i class="fa-solid fa-check"></i>
+                </div>
               </div>
-              <div v-if="isTranscribing && canRecordQ4Other" class="transcribing-hint">Transcribing…</div>
-              <textarea
-                v-model="q4OtherText"
-                class="transcription-input q4-other-textarea"
-                rows="2"
-                placeholder="Type your other reason here."
-              ></textarea>
-            </div>
-          </template>
 
-          <div class="action-row">
-            <button
-              v-if="prevAnswerForStep"
-              type="button"
-              class="btn-same"
-              @click="applySameAsLastMomentToForm"
-            >
-              Same as last moment
-            </button>
-            <button
-              type="button"
-              class="btn-confirm-main"
-              :disabled="!canConfirmCurrentStep"
-              @click="confirmCurrentStep"
-            >
-              Confirm
-            </button>
-          </div>
+              <transition name="answer-card-flip" mode="out-in">
+                <div v-if="currentSection" :key="`ans-${stepIndex}`" class="question-block question-block--step">
+                  <div class="question-category">{{ currentSection.category }}</div>
+                  <label class="question-prompt-label">
+                    <template v-if="currentSectionQuestionParts && 'rest' in currentSectionQuestionParts">
+                      {{ currentSectionQuestionParts.lead
+                      }}<strong>{{ currentSectionQuestionParts.rest }}</strong>
+                    </template>
+                    <template v-else-if="currentSectionQuestionParts?.plain">{{
+                      currentSectionQuestionParts.plain
+                    }}</template>
+                  </label>
+                  <p v-if="currentSection.hint" class="question-note">{{ currentSection.hint }}</p>
+
+                  <template v-if="isLabelQuestionStep && currentSection.labels">
+                    <div
+                      v-for="label in currentSection.labels"
+                      :key="label.id"
+                      class="label-option"
+                      :class="{ selected: selectedLabelId === label.id }"
+                      @click="selectLabel(label.id)"
+                    >
+                      <div class="radio-dot" :class="{ selected: selectedLabelId === label.id }"></div>
+                      <div class="label-text">{{ label.text }}</div>
+                      <div
+                        v-if="label.id === 'other'"
+                        class="other-inline-row"
+                        @click.stop
+                      >
+                        <input
+                          v-model="otherLabelText"
+                          type="text"
+                          class="other-inline-input"
+                          placeholder="Please specify"
+                          :disabled="selectedLabelId !== 'other'"
+                        />
+                        <button
+                          type="button"
+                          class="btn-voice-inline"
+                          @click.stop="handleUpdate('other_label')"
+                          :disabled="isTranscribing || !canRecordOtherLabel"
+                        >
+                          <span v-if="isRecording && recordingTarget === 'other_label'" class="recording-indicator">●</span>
+                          <i v-else class="fa-solid fa-microphone"></i>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      v-if="isTranscribing && recordingTarget === 'other_label'"
+                      class="transcribing-hint"
+                    >
+                      Transcribing…
+                    </div>
+                  </template>
+
+                  <template v-else-if="isQ4Step">
+                    <div class="q4-options">
+                      <label class="radio-option">
+                        <input v-model="q4Value" type="radio" value="yes" />
+                        Yes
+                      </label>
+                      <label class="radio-option">
+                        <input v-model="q4Value" type="radio" value="no" />
+                        No
+                      </label>
+                    </div>
+                    <div v-if="q4Value === 'no'" class="q4-reasons">
+                      <div class="q4-reasons-hint">Select one or more reasons:</div>
+                      <label v-for="r in Q4_REASONS" :key="r" class="checkbox-option">
+                        <input type="checkbox" :checked="q4Reasons.includes(r)" @change="toggleQ4Reason(r)" />
+                        {{ r }}
+                      </label>
+                    </div>
+                    <div v-if="q4Value === 'no' && q4Reasons.includes(Q4_REASON_OTHER)" class="q4-other-block">
+                      <label class="q4-other-label">Please specify your &quot;Other&quot; reason (type or record):</label>
+                      <div class="recording-row">
+                        <button
+                          type="button"
+                          class="btn-record"
+                          @click="handleUpdate('q4_other')"
+                          :disabled="isTranscribing || !canRecordQ4Other"
+                          :class="{ active: canRecordQ4Other, disabled: !canRecordQ4Other }"
+                        >
+                          <span v-if="isRecording && recordingTarget === 'q4_other'" class="recording-indicator">●</span>
+                          <i v-else class="fa-solid fa-microphone"></i>
+                          {{
+                            isRecording && recordingTarget === 'q4_other'
+                              ? ' Recording - tap to stop'
+                              : q4OtherText
+                                ? ' Re-record'
+                                : canRecordQ4Other
+                                  ? ' Tap to record'
+                                  : ' Select Other above first'
+                          }}
+                        </button>
+                      </div>
+                      <div v-if="isTranscribing && canRecordQ4Other" class="transcribing-hint">Transcribing…</div>
+                      <textarea
+                        v-model="q4OtherText"
+                        class="transcription-input q4-other-textarea"
+                        rows="2"
+                        placeholder="Type your other reason here."
+                      ></textarea>
+                    </div>
+                  </template>
+
+                  <div class="action-row">
+                    <button
+                      v-if="prevAnswerForStep"
+                      type="button"
+                      class="btn-same"
+                      @click="applySameAsLastMomentToForm"
+                    >
+                      Same as last moment
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-confirm-main"
+                      :disabled="!canConfirmCurrentStep"
+                      @click="confirmCurrentStep"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                </div>
+              </transition>
+            </div>
+          </transition>
         </div>
         </template>
 
@@ -1255,6 +1427,7 @@ onMounted(() => {
 }
 
 .post-annotation-page {
+  color-scheme: light;
   height: 100%;
   background: #f5f5f5;
   padding: 12px;
@@ -1298,7 +1471,7 @@ onMounted(() => {
 
 .annotation-layout {
   display: grid;
-  grid-template-columns: 1.5fr 1fr;
+  grid-template-columns: 2fr 1fr;
   gap: 24px;
   margin: 0 auto;
   width: 100%;
@@ -1359,7 +1532,8 @@ onMounted(() => {
 .session-replay-preview__frame {
   flex: 1;
   min-width: 0;
-  max-height: 400px;
+  min-height: 340px;
+  max-height: 560px;
   aspect-ratio: 16/10;
   background: #eee;
   border-radius: 8px;
@@ -1453,8 +1627,9 @@ onMounted(() => {
 }
 
 .log-list {
-  flex: 1;
-  min-height: 200px;
+  flex: 0 0 210px;
+  /* min-height: 160px;
+  max-height: 260px; */
   overflow-y: auto;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -1967,6 +2142,271 @@ onMounted(() => {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+
+.annotation-workspace {
+  position: relative;
+  min-height: 200px;
+  perspective: 1200px;
+}
+
+.phase-block {
+  transform-style: preserve-3d;
+}
+
+.record-phase-instruction {
+  margin: 0 0 20px 0;
+  font-size: 14px;
+  color: #6b7280;
+  font-style: italic;
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.5;
+}
+
+.all-questions-overview {
+  text-align: left;
+  margin-bottom: 16px;
+}
+
+.overview-instruction {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+  line-height: 1.45;
+}
+
+.overview-questions-text {
+  margin: 0;
+  font-size: 16px;
+  color: #374151;
+  line-height: 1.55;
+}
+
+.moment-explain-recording {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.record-btn-circle {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  border: none;
+  background: #3b82f6;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.record-btn-circle:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.record-btn-circle.recording {
+  background: #ef4444;
+  animation: record-pulse 1s infinite;
+}
+
+.record-btn-circle.has-recorded:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.record-btn-circle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.record-circle-icon {
+  font-size: 28px;
+  color: white;
+}
+
+@keyframes record-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.05);
+  }
+}
+
+.sound-wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 40px;
+}
+
+.wave-bar {
+  width: 4px;
+  height: 20px;
+  background: #3b82f6;
+  border-radius: 2px;
+  animation: sound-wave 0.8s ease-in-out infinite;
+}
+
+.wave-bar:nth-child(1) {
+  animation-delay: 0s;
+}
+.wave-bar:nth-child(2) {
+  animation-delay: 0.1s;
+}
+.wave-bar:nth-child(3) {
+  animation-delay: 0.2s;
+}
+.wave-bar:nth-child(4) {
+  animation-delay: 0.3s;
+}
+.wave-bar:nth-child(5) {
+  animation-delay: 0.4s;
+}
+.wave-bar:nth-child(6) {
+  animation-delay: 0.5s;
+}
+.wave-bar:nth-child(7) {
+  animation-delay: 0.4s;
+}
+.wave-bar:nth-child(8) {
+  animation-delay: 0.3s;
+}
+.wave-bar:nth-child(9) {
+  animation-delay: 0.2s;
+}
+.wave-bar:nth-child(10) {
+  animation-delay: 0.1s;
+}
+.wave-bar:nth-child(11) {
+  animation-delay: 0s;
+}
+.wave-bar:nth-child(12) {
+  animation-delay: 0.1s;
+}
+
+@keyframes sound-wave {
+  0%,
+  100% {
+    height: 8px;
+  }
+  50% {
+    height: 24px;
+  }
+}
+
+.moment-explain-transcription {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.moment-explain-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  margin-bottom: 8px;
+  text-align: left;
+}
+
+.action-row--record-confirm {
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+.action-row--record-confirm .btn-confirm-main {
+  flex: 0 0 auto;
+  min-width: 120px;
+}
+
+.answer-phase {
+  position: relative;
+  min-height: 120px;
+}
+
+.step-success-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 10px;
+  animation: success-fade-in 0.2s ease;
+}
+
+.step-success-check {
+  font-size: 96px;
+  line-height: 1;
+  color: #16a34a;
+  animation: success-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes success-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes success-pop {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.phase-flip-enter-active,
+.phase-flip-leave-active {
+  transition:
+    transform 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.35s ease;
+}
+
+.phase-flip-enter-from {
+  transform: rotateY(-88deg);
+  opacity: 0;
+}
+
+.phase-flip-leave-to {
+  transform: rotateY(88deg);
+  opacity: 0;
+}
+
+.answer-card-flip-enter-active,
+.answer-card-flip-leave-active {
+  transition:
+    transform 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.3s ease;
+}
+
+.answer-card-flip-enter-from {
+  transform: rotateY(-75deg);
+  opacity: 0;
+}
+
+.answer-card-flip-leave-to {
+  transform: rotateY(75deg);
+  opacity: 0;
+}
+
+.question-block--step {
+  padding-bottom: 4px;
 }
 
 </style>

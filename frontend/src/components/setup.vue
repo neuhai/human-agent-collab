@@ -410,6 +410,15 @@ const updateAnnotationSetting = async (event) => {
   }
 }
 
+/** Map task + in-session annotation: duration does not limit the session (dual submit ends it). */
+function hideMaptaskDurationParam(param) {
+  return (
+    selectedExperimentType.value === 'maptask' &&
+    annotationEnabled.value &&
+    param?.path === 'Session.Params.duration'
+  )
+}
+
 // Handle WebSocket participant updates
 const handleParticipantsUpdate = (data) => {
   if (data.participants) {
@@ -3002,7 +3011,7 @@ const loadSessionFromName = async () => {
                       
                       <!-- Number input -->
                       <input 
-                        v-if="param.type === 'number'" 
+                        v-if="param.type === 'number' && !hideMaptaskDurationParam(param)" 
                         :type="param.type" 
                         :id="getConfigKey(param)" 
                         :value="getConfigValue(param)"
@@ -3012,6 +3021,13 @@ const loadSessionFromName = async () => {
                         :max="param.max || 10000"
                         :step="param.step || 1"
                       />
+                      <p
+                        v-else-if="param.type === 'number' && hideMaptaskDurationParam(param)"
+                        class="form-helper"
+                        :id="getConfigKey(param)"
+                      >
+                        Not used while in-session annotation is on. The session clock counts up without a time limit, and both participants end the session with Submit task.
+                      </p>
                       
                       <!-- Text input / Textarea (for word list) -->
                       <textarea 

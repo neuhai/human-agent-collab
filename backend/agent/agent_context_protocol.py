@@ -16,6 +16,8 @@ from datetime import datetime
 import routes.session as session_module
 from routes.participant import find_session_by_identifier, get_value_from_session_params
 from websocket.handlers import broadcast_participant_update, get_socketio
+from services import agent_tts
+from services.action_logger import utc_now_iso_z
 from functions import start_production
 
 
@@ -207,15 +209,36 @@ class AgentContextProtocol:
                     'error': f'Recipient not found: {recipient_code}'
                 }
         
-        # Create message object
+        actual_session_id = session.get('session_id') or session_key
+        msg_ts = utc_now_iso_z()
+        emit_room = actual_session_id
+
         message = {
             'id': str(uuid.uuid4()),
-            'session_id': self.session_id,
+            'session_id': actual_session_id,
             'sender': self.participant_id,
             'receiver': None if is_group_chat else recipient.get('id'),  # None for group chat
             'content': content,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': msg_ts,
         }
+
+        # Match human voice messages when audio medium is enabled: transcription + playable URL
+        if self._session_includes_audio_media(session):
+            audio_bytes, tts_err = agent_tts.synthesize_agent_tts(content)
+            if audio_bytes:
+                try:
+                    audio_url = agent_tts.save_audio_bytes(audio_bytes, '.mp3')
+                    message['message_type'] = 'audio'
+                    message['audio_url'] = audio_url
+                    message['duration'] = agent_tts.estimate_speech_duration_seconds(content)
+                except OSError as e:
+                    print(f'[AgentContextProtocol] TTS file save failed: {e}')
+                    message['message_type'] = 'text'
+            else:
+                print(f'[AgentContextProtocol] Agent TTS skipped, sending text only: {tts_err}')
+                message['message_type'] = 'text'
+        else:
+            message['message_type'] = 'text'
         
         # Store message in session
         if 'messages' not in session:
@@ -234,9 +257,9 @@ class AgentContextProtocol:
         # Update session storage
         session_module.commit_session(session_key, session)
         
-        # Broadcast message via WebSocket
+        # Broadcast message via WebSocket (room = session UUID, same as handle_send_message)
         socketio = get_socketio()
-        socketio.emit('message_received', message, room=self.session_id)
+        socketio.emit('message_received', message, room=emit_room)
         
         return {
             'success': True,
@@ -244,6 +267,16 @@ class AgentContextProtocol:
             'message_id': message['id']
         }
     
+    def _session_includes_audio_media(self, session: Dict[str, Any]) -> bool:
+        media = get_value_from_session_params(session, 'Session.Interaction.communicationMedia')
+        if not media:
+            return False
+        if isinstance(media, list):
+            return 'audio' in media
+        if isinstance(media, str):
+            return media.strip().lower() == 'audio'
+        return False
+
     def _find_session(self):
         """Find session by session_id"""
         return find_session_by_identifier(self.session_id)
@@ -304,6 +337,8 @@ class AgentContextProtocol:
             return f"${action.get('amount', '')} ({action.get('investment_type', '')})"
         if action_type == 'produce_shape':
             return str(action.get('shape', ''))
+        if action_type == 'send_map_guidance':
+            return (action.get('content') or '')[:200]
         return str(action)[:200]
 
 
@@ -954,9 +989,30 @@ def _execute_fulfill_order_shapefactory(
     current_money = exp_params.get('money', 0)
     exp_params['money'] = current_money + (incentive_money * len(shapes_to_fulfill))
     
-    # Update order progress
-    current_order_progress = exp_params.get('order_progress', 0)
-    exp_params['order_progress'] = current_order_progress + len(shapes_to_fulfill)
+    # Update order progress.
+    # order_progress is displayed in Awareness Dashboard as a percentage:
+    # fulfilled_shapes / Session.Params.shapesOrder * 100.
+    try:
+        current_fulfilled = int(exp_params.get('fulfilled_shapes', exp_params.get('order_progress', 0)) or 0)
+    except Exception:
+        current_fulfilled = 0
+    current_fulfilled += len(shapes_to_fulfill)
+    exp_params['fulfilled_shapes'] = current_fulfilled
+
+    shapes_order_n = get_value_from_session_params(session, 'Session.Params.shapesOrder')
+    try:
+        shapes_order_n = int(shapes_order_n) if shapes_order_n is not None else 4
+    except Exception:
+        shapes_order_n = 4
+    if shapes_order_n <= 0:
+        shapes_order_n = 4
+
+    percent = int(round((current_fulfilled / shapes_order_n) * 100))
+    if percent < 0:
+        percent = 0
+    if percent > 100:
+        percent = 100
+    exp_params['order_progress'] = percent
     
     # Update participant
     exp_params['inventory'] = inventory
@@ -1716,6 +1772,81 @@ def _execute_submit_final_vote_hiddenprofile(
 
 
 # ============================================================================
+# MapTask-specific action handlers
+# ============================================================================
+
+def _execute_send_map_guidance_maptask(
+    self: AgentContextProtocol,
+    action: Dict[str, Any],
+    participant: Dict[str, Any],
+    session: Dict[str, Any],
+    session_key: str
+) -> Dict[str, Any]:
+    """Execute send_map_guidance action for MapTask guide agent."""
+    role = (participant.get('role') or '').strip().lower()
+    if role != 'guide':
+        return {
+            'success': False,
+            'action': action,
+            'error': 'Only guide participants can use send_map_guidance'
+        }
+
+    content = (action.get('content') or '').strip()
+    if not content:
+        return {
+            'success': False,
+            'action': action,
+            'error': 'Missing content for send_map_guidance'
+        }
+
+    recipient = (action.get('recipient') or '').strip()
+    if not recipient:
+        # Default route: find the follower in this session.
+        for p in (session.get('participants') or []):
+            if (p.get('id') == self.participant_id):
+                continue
+            p_role = (p.get('role') or '').strip().lower()
+            if p_role == 'follower':
+                recipient = (p.get('name') or p.get('participant_name') or '').strip()
+                break
+
+    if not recipient:
+        return {
+            'success': False,
+            'action': action,
+            'error': 'Follower recipient not found for send_map_guidance'
+        }
+
+    # Keep execution path consistent with normal messaging.
+    normalized_action = {
+        'type': 'message',
+        'recipient': recipient,
+        'content': content,
+    }
+    result = self._execute_message(normalized_action, participant, session, session_key)
+    if not result.get('success'):
+        return {
+            'success': False,
+            'action': action,
+            'error': result.get('error', 'Failed to send map guidance')
+        }
+
+    guide_map = (participant.get('experiment_params') or {}).get('map') or {}
+    map_ref = (
+        guide_map.get('file_path')
+        or guide_map.get('filename')
+        or guide_map.get('original_filename')
+    ) if isinstance(guide_map, dict) else None
+    return {
+        'success': True,
+        'action': action,
+        'message_id': result.get('message_id'),
+        'recipient': recipient,
+        'map_input': map_ref
+    }
+
+
+# ============================================================================
 # Register action handlers for each experiment type
 # ============================================================================
 
@@ -1739,6 +1870,9 @@ def _register_all_handlers():
     register_action_handler('hiddenprofile', 'get_candidate_names', _execute_get_candidate_names_hiddenprofile)
     register_action_handler('hiddenprofile', 'submit_initial_vote', _execute_submit_initial_vote_hiddenprofile)
     register_action_handler('hiddenprofile', 'submit_final_vote', _execute_submit_final_vote_hiddenprofile)
+
+    # MapTask handlers
+    register_action_handler('maptask', 'send_map_guidance', _execute_send_map_guidance_maptask)
     
     # WordGuessing handlers (only message, which is already handled as common action)
 

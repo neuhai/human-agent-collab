@@ -136,6 +136,15 @@ class AgentRunner:
                     # Wait a bit before checking again
                     time.sleep(5)
                     continue
+
+                # Meeting room + Realtime bridge: no chat-completions perception loop
+                try:
+                    from services.realtime_session_config import session_includes_meeting_room
+                    if session_includes_meeting_room(session):
+                        time.sleep(5)
+                        continue
+                except Exception:
+                    pass
                 
                 # Get perception time window
                 perception_window = get_value_from_session_params(
@@ -160,6 +169,12 @@ class AgentRunner:
     def _perceive_and_act(self, session: Dict[str, Any], session_key: str):
         """Perceive environment and generate/execute actions"""
         try:
+            try:
+                from services.realtime_session_config import session_includes_meeting_room
+                if session_includes_meeting_room(session):
+                    return
+            except Exception:
+                pass
             # Get participant
             participant = self._find_participant(session)
             if not participant:
@@ -209,7 +224,7 @@ class AgentRunner:
             # print(f'{"="*80}\n')
             
             # Call LLM to generate actions
-            response = self._call_llm(prompt)
+            response = self._call_llm(prompt, participant)
             
             if not response:
                 print(f'[AgentRunner] No response from LLM for participant {self.participant_id}')
@@ -344,7 +359,7 @@ class AgentRunner:
         print(f'[AgentRunner] HiddenProfile: Vote prompt:\n{vote_prompt}')
         
         # Call LLM
-        response = self._call_llm(vote_prompt)
+        response = self._call_llm(vote_prompt, participant)
         if not response:
             print(f'[AgentRunner] HiddenProfile: LLM returned no response')
             return False
@@ -917,6 +932,8 @@ Response:"""
             prompt = self._replace_wordguessing_placeholders(prompt, participant, session)
         elif self.experiment_type == 'hiddenprofile':
             prompt = self._replace_hiddenprofile_placeholders(prompt, participant, session)
+        elif self.experiment_type == 'maptask':
+            prompt = self._replace_maptask_placeholders(prompt, participant, session)
         
         # Add perception section
         prompt += f"\n\n<CURRENT GAME STATE>\n{perception_str}\n"
@@ -935,6 +952,9 @@ Response:"""
                 p_specialty = p.get('specialty', '')
                 participants_list.append(f"- {p_name}: Specialty = {p_specialty}")
             elif self.experiment_type == 'wordguessing':
+                p_role = p.get('role', '')
+                participants_list.append(f"- {p_name}: Role = {p_role}")
+            elif self.experiment_type == 'maptask':
                 p_role = p.get('role', '')
                 participants_list.append(f"- {p_name}: Role = {p_role}")
             else:
@@ -1133,6 +1153,23 @@ Response:"""
         prompt = prompt.replace('{assigned_doc}', assigned_doc_str)
         prompt = prompt.replace('{candidate_list}', candidate_list_str)
         
+        return prompt
+
+    def _replace_maptask_placeholders(self, prompt: str, participant: Dict[str, Any], session: Dict[str, Any]) -> str:
+        """Replace MapTask-specific placeholders"""
+        role = participant.get('role') or 'guide'
+        exp_params = participant.get('experiment_params', {})
+        assigned_map = exp_params.get('map')
+
+        if isinstance(assigned_map, dict):
+            map_display = assigned_map.get('file_path') or assigned_map.get('original_filename') or assigned_map.get('filename') or str(assigned_map)
+        elif assigned_map:
+            map_display = str(assigned_map)
+        else:
+            map_display = 'No map assigned'
+
+        prompt = prompt.replace('{participant_role}', str(role))
+        prompt = prompt.replace('{assigned_map}', map_display)
         return prompt
     
     def _read_document_content(self, filename: str) -> Optional[str]:
@@ -1356,20 +1393,37 @@ Response:"""
         
         return other_rankings
     
-    def _call_llm(self, prompt: str) -> Optional[str]:
-        """Call LLM to generate actions"""
+    def _call_llm(self, prompt: str, participant: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """Call LLM to generate actions. Map Task guide: attaches the assigned map image (vision) when supported."""
         if not self.llm_client:
             # Mock response for testing
             print(f'[AgentRunner] Mock LLM called (no LLM client)')
             return self._mock_llm_response()
         
+        user_content: Any = prompt
+        if (
+            participant is not None
+            and self.llm_client.supports_multimodal_images()
+            and (self.experiment_type or "").lower() == "maptask"
+        ):
+            from agent.map_image_for_llm import guide_map_data_url_for_openai_vision
+            data_url = guide_map_data_url_for_openai_vision(participant, self.experiment_type)
+            if data_url:
+                user_content = [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ]
+                print('[AgentRunner] maptask: attached guide map raster image to chat completion (vision)')
+            else:
+                print('[AgentRunner] maptask: vision image not attached (missing file on disk, non-raster map, or not guide)')
+
         try:
             # Use unified LLM client interface
             # Note: response_format is handled by the client implementation
             response = self.llm_client.chat_completions_create(
                 messages=[
                     {"role": "system", "content": "You are an AI agent participating in an economic experiment. Follow the instructions carefully and respond with valid JSON."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": user_content}
                 ],
                 temperature=0.7,
                 max_tokens=4096,
@@ -1551,6 +1605,7 @@ def start_agent_runner(participant_id: str, session_id: str):
                 print(f'[AgentRunner] Broadcasted online status update for participant {participant_id} ({participant_name})')
             else:
                 print(f'[AgentRunner] Warning: Participant {participant_id} not found in session when updating online status')
+
         except Exception as e:
             print(f'[AgentRunner] Error updating online status: {e}')
             import traceback

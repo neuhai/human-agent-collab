@@ -45,6 +45,36 @@ def _find_participant(found_session, participant_id):
     return None
 
 
+def _register_participant_agent_runner(found_session, session_key, participant) -> bool:
+    """Register/start agent runner for an AI participant when experiment_type is available."""
+    participant_type = (participant.get('type') or '').lower()
+    if participant_type not in ('ai', 'ai_agent'):
+        return False
+
+    experiment_type = found_session.get('experiment_type')
+    if not experiment_type:
+        participant['status'] = 'online'
+        return True
+
+    try:
+        from agent.agent_runner import register_agent_runner
+        session_id = found_session.get('session_id') or session_key
+        participant_role = participant.get('role')
+        register_agent_runner(
+            participant_id=participant.get('id'),
+            session_id=session_id,
+            experiment_type=experiment_type,
+            participant_role=participant_role
+        )
+        participant['status'] = 'online'
+        return True
+    except Exception as e:
+        print(f'[Participant] Error registering agent runner: {e}')
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def _log_human_action(session_key, found_session, participant_id, action_type, action_content,
                       result='success', metadata=None, data=None, page=None, map_image=None):
     """Helper to log human participant action. data is the request JSON for screenshot/html_snapshot."""
@@ -927,32 +957,8 @@ def register_participants(session_identifier):
             update_participant_experiment_params(participant, found_session)
             
             # Initialize agent runner if participant is an AI agent
-            participant_type = participant.get('type', '').lower()
-            if participant_type in ('ai', 'ai_agent'):
-                experiment_type = found_session.get('experiment_type')
-                if experiment_type:
-                    try:
-                        from agent.agent_runner import register_agent_runner
-                        session_id = found_session.get('session_id') or session_key
-                        participant_role = participant.get('role')  # For wordguessing
-                        register_agent_runner(
-                            participant_id=participant.get('id'),
-                            session_id=session_id,
-                            experiment_type=experiment_type,
-                            participant_role=participant_role
-                        )
-                        # Mark agent as online when registered (even if not started yet)
-                        participant['status'] = 'online'
-                        print(f'[Participant] Registered agent runner for participant {participant.get("id")} ({participant.get("name") or participant.get("participant_name")}) in session {session_id}, marked as online')
-                    except Exception as e:
-                        print(f'[Participant] Error registering agent runner: {e}')
-                        import traceback
-                        traceback.print_exc()
-                else:
-                    # Experiment type not set yet, agent will be registered when experiment_type is set
-                    # But we can still mark as online to show it's an AI participant
-                    participant['status'] = 'online'
-                    print(f'[Participant] AI participant {participant.get("id")} ({participant.get("name") or participant.get("participant_name")}) registered, waiting for experiment_type to be set')
+            if _register_participant_agent_runner(found_session, session_key, participant):
+                print(f'[Participant] Registered agent runner for participant {participant.get("id")} ({participant.get("name") or participant.get("participant_name")})')
         
         found_session['participants'] = participants_list
         
@@ -1137,9 +1143,27 @@ def handle_submit_shape(session_identifier, participant_id):
         current_money = exp_params.get('money', 0)
         exp_params['money'] = current_money + incentive_money
         
-        # Update order progress (increment by 1)
-        current_order_progress = exp_params.get('order_progress', 0)
-        exp_params['order_progress'] = current_order_progress + 1
+        # Update order progress.
+        # order_progress is displayed in the Awareness Dashboard as a percentage.
+        # Shape Factory defines a "shape order" as N fulfilled shapes (Session.Params.shapesOrder).
+        current_fulfilled = int(exp_params.get('fulfilled_shapes', exp_params.get('order_progress', 0)) or 0)
+        current_fulfilled += 1
+        exp_params['fulfilled_shapes'] = current_fulfilled
+
+        shapes_order_n = get_value_from_session_params(found_session, 'Session.Params.shapesOrder')
+        try:
+            shapes_order_n = int(shapes_order_n) if shapes_order_n is not None else 4
+        except Exception:
+            shapes_order_n = 4
+        if shapes_order_n <= 0:
+            shapes_order_n = 4
+
+        percent = int(round((current_fulfilled / shapes_order_n) * 100))
+        if percent < 0:
+            percent = 0
+        if percent > 100:
+            percent = 100
+        exp_params['order_progress'] = percent
         
         # Update participant
         participant['experiment_params'] = exp_params
@@ -1251,6 +1275,46 @@ def update_participant(session_identifier, participant_id):
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@participant_bp.route('/api/sessions/<path:session_identifier>/participants/<participant_id>/register_agent_guide', methods=['POST'])
+def register_agent_guide(session_identifier, participant_id):
+    """Register an existing participant as an AI guide for Map Task."""
+    try:
+        session_key, found_session = find_session_by_identifier(session_identifier)
+        if not found_session:
+            return jsonify({'success': False, 'error': 'Session not found'}), 404
+
+        if found_session.get('experiment_type') != 'maptask':
+            return jsonify({'success': False, 'error': 'register_agent_guide only applies to maptask sessions'}), 400
+
+        participant = _find_participant(found_session, participant_id)
+        if not participant:
+            return jsonify({'success': False, 'error': 'Participant not found'}), 404
+
+        participant['type'] = 'ai'
+        participant['role'] = 'guide'
+        update_participant_experiment_params(participant, found_session)
+
+        if not _register_participant_agent_runner(found_session, session_key, participant):
+            return jsonify({'success': False, 'error': 'Failed to register agent runner'}), 500
+
+        participants_list = found_session.get('participants', [])
+        session_module.commit_session(session_key, found_session)
+        broadcast_participant_update(
+            session_id=found_session.get('session_id') or session_key,
+            participants=participants_list,
+            session_info=found_session,
+            update_type='partial'
+        )
+
+        return jsonify({
+            'success': True,
+            'message': 'Participant registered as AI guide',
+            'participant': participant
+        }), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # Transcribe audio using OpenAI Whisper (supports Azure OpenAI)
@@ -1471,6 +1535,15 @@ def update_map_progress(session_identifier, participant_id):
         if not isinstance(map_progress, dict):
             return jsonify({'success': False, 'error': 'map_progress must be an object'}), 400
 
+        rr_raw = data.get('route_pixel_ratio')
+        if rr_raw is None:
+            rr_raw = map_progress.get('route_pixel_ratio')
+        from services.annotation_service import parse_route_pixel_ratio_optional
+
+        coerced_rr = parse_route_pixel_ratio_optional(rr_raw)
+        if coerced_rr is not None:
+            found_session['maptask_follower_route_pixel_ratio'] = coerced_rr
+
         if 'experiment_params' not in participant:
             participant['experiment_params'] = {}
         participant['experiment_params']['map_progress'] = map_progress
@@ -1533,20 +1606,28 @@ def log_action_endpoint(session_identifier, participant_id):
             participant=participant,
             client_timestamp=data.get('client_timestamp'),
         )
-        # In-session annotation: trigger on draw stop when annotation enabled
-        if action_type == 'map_draw_stop':
+        # In-session annotation: Map Task — route-milestone checkpoints on any logged action (metadata may carry route_pixel_ratio)
+        if found_session.get('experiment_type') == 'maptask':
             try:
                 from services.annotation_service import (
                     should_trigger_annotation,
                     trigger_annotation,
+                    parse_route_pixel_ratio_optional,
                 )
+                md = data.get('metadata') if isinstance(data.get('metadata'), dict) else {}
+                rr = parse_route_pixel_ratio_optional(md.get('route_pixel_ratio'))
                 should_trigger, checkpoint = should_trigger_annotation(
-                    session_key, found_session, canonical_pid, 'draw_stop'
+                    session_key,
+                    found_session,
+                    canonical_pid,
+                    action_type,
+                    route_pixel_ratio=rr,
+                    client_timestamp=data.get('client_timestamp'),
                 )
                 if should_trigger and checkpoint is not None:
                     trigger_annotation(session_key, found_session, checkpoint, sessions)
             except Exception as ann_err:
-                print(f'[Annotation] Error checking/triggering after draw stop: {ann_err}')
+                print(f'[Annotation] Error checking/triggering after log_action: {ann_err}')
         return jsonify({'success': True, 'action_id': action_id}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1591,6 +1672,92 @@ def submit_annotation(session_identifier, participant_id):
             elapsed_seconds=elapsed_seconds,
         )
         return jsonify({'success': True, 'resumed': resumed}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@participant_bp.route('/api/sessions/<path:session_identifier>/maptask_submit_confirm', methods=['POST'])
+def maptask_submit_confirm(session_identifier):
+    """Map task + in-session annotation: human confirms task finished; all humans must confirm to go to post-session."""
+    try:
+        data = request.get_json(silent=True) or {}
+        participant_id = data.get('participant_id')
+        if not participant_id:
+            return jsonify({'success': False, 'error': 'participant_id is required'}), 400
+
+        from services.annotation_service import (
+            is_maptask_untimed_annotation_session,
+            get_human_participant_ids,
+        )
+        from routes.session import commit_session
+        from services.timer_service import pause_timer, get_timer
+        from websocket.handlers import get_socketio
+
+        session_key, found_session = find_session_by_identifier(session_identifier)
+        if not found_session:
+            return jsonify({'success': False, 'error': 'Session not found'}), 404
+        if not is_maptask_untimed_annotation_session(found_session):
+            return jsonify({'success': False, 'error': 'Not applicable for this session'}), 400
+        if found_session.get('status') != 'running':
+            return jsonify({'success': False, 'error': 'Session is not running'}), 400
+
+        human_ids = get_human_participant_ids(found_session)
+        if participant_id not in human_ids:
+            return jsonify({'success': False, 'error': 'Participant not in session'}), 403
+
+        participant = _find_participant(found_session, participant_id)
+        if not participant:
+            return jsonify({'success': False, 'error': 'Participant not found'}), 404
+        if (participant.get('type') or '').lower() in ('ai', 'ai_agent'):
+            return jsonify({'success': False, 'error': 'Only human participants may confirm'}), 403
+
+        canonical_pid = participant.get('id') or participant.get('participant_id') or participant_id
+        confirmed = list(found_session.get('maptask_submit_confirmed_ids') or [])
+        if canonical_pid not in confirmed:
+            confirmed.append(canonical_pid)
+
+        found_session['maptask_submit_confirmed_ids'] = confirmed
+        session_id = found_session.get('session_id') or session_key
+
+        socketio = get_socketio()
+        socketio.emit(
+            'maptask_submit_status',
+            {
+                'session_id': session_id,
+                'confirmed_ids': confirmed,
+                'human_ids': human_ids,
+            },
+            room=session_id,
+        )
+
+        all_confirmed = len(human_ids) > 0 and all(h in confirmed for h in human_ids)
+
+        if not all_confirmed:
+            commit_session(session_key, found_session)
+            return jsonify(
+                {
+                    'success': True,
+                    'all_confirmed': False,
+                    'confirmed_ids': confirmed,
+                    'human_ids': human_ids,
+                }
+            ), 200
+
+        pause_timer(session_id)
+        timer = get_timer(session_id)
+        if timer:
+            found_session['remaining_seconds'] = timer.get_remaining_seconds()
+        found_session['status'] = 'paused'
+        commit_session(session_key, found_session)
+
+        socketio.emit('maptask_post_annotation_ready', {'session_id': session_id}, room=session_id)
+        broadcast_participant_update(
+            session_id=session_id,
+            participants=found_session.get('participants', []),
+            session_info=found_session,
+            update_type='maptask_post_annotation_ready',
+        )
+        return jsonify({'success': True, 'all_confirmed': True}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

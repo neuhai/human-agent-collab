@@ -12,6 +12,8 @@ from flask_cors import CORS
 from routes.session import session_bp, hydrate_sessions_from_db
 from routes.participant import participant_bp
 from routes.mturk import mturk_bp
+from routes.realtime_routes import realtime_bp
+from routes.meeting_floor_routes import meeting_floor_bp
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or os.environ.get('SECRET_KEY') or 'your-secret-key-here'
@@ -20,6 +22,8 @@ app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or os.environ.get(
 app.register_blueprint(session_bp)
 app.register_blueprint(participant_bp)
 app.register_blueprint(mturk_bp)
+app.register_blueprint(realtime_bp)
+app.register_blueprint(meeting_floor_bp)
 
 # Restore researcher sessions from PostgreSQL before other services use the in-memory store
 hydrate_sessions_from_db()

@@ -11,6 +11,10 @@ from abc import ABC, abstractmethod
 
 class LLMClient(ABC):
     """Abstract base class for LLM clients"""
+
+    def supports_multimodal_images(self) -> bool:
+        """True if chat.completions accepts OpenAI-style image_url parts in message content."""
+        return False
     
     @abstractmethod
     def chat_completions_create(
@@ -39,6 +43,9 @@ class LLMClient(ABC):
 
 class OpenAIClient(LLMClient):
     """OpenAI API client"""
+
+    def supports_multimodal_images(self) -> bool:
+        return True
     
     def __init__(self, api_key: str):
         try:
@@ -70,6 +77,9 @@ class OpenAIClient(LLMClient):
 
 class AzureOpenAIClient(LLMClient):
     """Azure OpenAI API client"""
+
+    def supports_multimodal_images(self) -> bool:
+        return True
     
     def __init__(
         self,

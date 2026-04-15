@@ -1,5 +1,6 @@
 <script setup>
 import { inject, computed, ref } from 'vue'
+import { isTypeIndicatorEnabled } from '../utils/interactionConfig.js'
 import ParticipantsList from './participants_status.vue'
 import ConversationView from './conversation_feed.vue'
 import TradesFeed from './trade_feed.vue'
@@ -157,7 +158,7 @@ const monitorCommIsGroup = computed(() => {
   return level.includes('group')
 })
 
-const typeIndicatorEnabledMonitor = computed(() => interactionConfig.value?.typeIndicator === 'enabled')
+const typeIndicatorEnabledMonitor = computed(() => isTypeIndicatorEnabled(interactionConfig.value))
 
 const typingSenderIdsForConversation = computed(() => {
   if (!typeIndicatorEnabledMonitor.value) return []

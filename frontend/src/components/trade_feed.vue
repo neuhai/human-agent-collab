@@ -57,15 +57,80 @@ const currentUserId = computed(() => {
   return props.myParticipantId || sessionStorage.getItem('participant_id')
 })
 
-// Filter offers/trades for current user or selected participant (with deduplication)
+const normalizeId = (v) => {
+  if (v == null) return null
+  const s = String(v).trim()
+  return s ? s : null
+}
+
+const isTradeBetweenPair = (record, a, b) => {
+  const from = normalizeId(record?.from)
+  const to = normalizeId(record?.to)
+  if (!from || !to || !a || !b) return false
+  return (from === a && to === b) || (from === b && to === a)
+}
+
+const isTradeInvolving = (record, id) => {
+  const from = normalizeId(record?.from)
+  const to = normalizeId(record?.to)
+  if (!id) return false
+  return from === id || to === id
+}
+
+const getRecordKey = (r) => {
+  const id = r?.id ?? r?.offer_id ?? r?.transaction_id
+  if (id != null && String(id).trim()) return String(id).trim()
+  const from = normalizeId(r?.from) || 'unknown_from'
+  const to = normalizeId(r?.to) || 'unknown_to'
+  const ts = r?.timestamp != null ? String(r.timestamp) : ''
+  const price = r?.price != null ? String(r.price) : ''
+  const qty = r?.quantity != null ? String(r.quantity) : ''
+  const item = r?.trade_item ?? r?.shape ?? ''
+  return `${from}|${to}|${ts}|${price}|${qty}|${item}`
+}
+
+const isPendingStatus = (s) => {
+  const v = String(s || 'pending').toLowerCase()
+  return v === 'pending' || v === 'proposed' || v === 'negotiating'
+}
+
+const canShowOfferActions = (offer) => {
+  // Only show actionable buttons in participant UI when we have enough context to call APIs
+  if (!props.isSessionActive) return false
+  if (!props.sessionIdentifier) return false
+  if (!currentUserId.value) return false
+  if (!offer) return false
+  if (!isPendingStatus(offer.status)) return false
+  // Need an offer identifier for API calls
+  const offerId = offer?.id ?? offer?.offer_id ?? offer?.transaction_id
+  return offerId != null && String(offerId).trim().length > 0
+}
+
+const isIncomingOfferForMe = (offer) => {
+  const me = normalizeId(currentUserId.value)
+  if (!me) return false
+  return normalizeId(offer?.to) === me
+}
+
+const offerIdForApi = (offer) => {
+  return offer?.id ?? offer?.offer_id ?? offer?.transaction_id
+}
+
+// Filter offers/trades (with deduplication)
+// Participant UI requirement:
+// - if a peer is selected, only show trades between me and that peer
+// - otherwise (no peer selected), show trades involving me (if known), else show all
 const pendingOffersFiltered = computed(() => {
   const list = Array.isArray(props.pendingOffers) ? props.pendingOffers : []
-  const userId = props.selectedParticipant || currentUserId.value
-  if (!userId) {
+  const me = normalizeId(currentUserId.value)
+  const peer = normalizeId(props.selectedParticipant)
+
+  // Researcher / monitor view: no me + no peer => show all (deduped)
+  if (!me && !peer) {
     // Deduplicate by id
     const seen = new Set()
     return list.filter(o => {
-      const id = o?.id
+      const id = getRecordKey(o)
       if (!id || seen.has(id)) return false
       seen.add(id)
       return true
@@ -75,24 +140,26 @@ const pendingOffersFiltered = computed(() => {
   // Filter and deduplicate
   const seen = new Set()
   return list.filter(o => {
-    const id = o?.id
+    const id = getRecordKey(o)
     if (!id || seen.has(id)) return false
-    if (o?.from === userId || o?.to === userId) {
-      seen.add(id)
-      return true
-    }
-    return false
+    const ok = peer && me ? isTradeBetweenPair(o, me, peer) : isTradeInvolving(o, me)
+    if (!ok) return false
+    seen.add(id)
+    return true
   })
 })
 
 const completedTradesFiltered = computed(() => {
   const list = Array.isArray(props.completedTrades) ? props.completedTrades : []
-  const userId = props.selectedParticipant || currentUserId.value
-  if (!userId) {
+  const me = normalizeId(currentUserId.value)
+  const peer = normalizeId(props.selectedParticipant)
+
+  // Researcher / monitor view: no me + no peer => show all (deduped)
+  if (!me && !peer) {
     // Deduplicate by id
     const seen = new Set()
     return list.filter(t => {
-      const id = t?.id
+      const id = getRecordKey(t)
       if (!id || seen.has(id)) return false
       seen.add(id)
       return true
@@ -102,13 +169,12 @@ const completedTradesFiltered = computed(() => {
   // Filter and deduplicate
   const seen = new Set()
   return list.filter(t => {
-    const id = t?.id
+    const id = getRecordKey(t)
     if (!id || seen.has(id)) return false
-    if (t?.from === userId || t?.to === userId) {
-      seen.add(id)
-      return true
-    }
-    return false
+    const ok = peer && me ? isTradeBetweenPair(t, me, peer) : isTradeInvolving(t, me)
+    if (!ok) return false
+    seen.add(id)
+    return true
   })
 })
 
@@ -297,6 +363,34 @@ const cancelTradeOffer = async (offerId) => {
               {{ offer.quantity || 1 }}x {{ getItemDisplayName(getTradeItem(offer), getItemType(offer)) }} @ ${{ offer.price }}
             </div>
             <div :class="['trade-status', offer.status || 'pending']">{{ (offer.status || 'pending').toUpperCase() }}</div>
+
+            <div v-if="canShowOfferActions(offer)" class="offer-actions">
+              <template v-if="isIncomingOfferForMe(offer)">
+                <button
+                  type="button"
+                  class="offer-action-btn accept"
+                  @click="respondToOffer(offerIdForApi(offer), 'accept')"
+                >
+                  Accept
+                </button>
+                <button
+                  type="button"
+                  class="offer-action-btn decline"
+                  @click="respondToOffer(offerIdForApi(offer), 'decline')"
+                >
+                  Decline
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  type="button"
+                  class="offer-action-btn cancel"
+                  @click="cancelTradeOffer(offerIdForApi(offer))"
+                >
+                  Cancel
+                </button>
+              </template>
+            </div>
           </div>
           <div v-if="!recentPendingOffers.length" class="empty">No pending offers</div>
         </div>
@@ -451,6 +545,40 @@ const cancelTradeOffer = async (offerId) => {
 .trade-status.cancelled {
   background: #f8d7da;
   color: #721c24;
+}
+
+.offer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.offer-action-btn {
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.offer-action-btn:hover {
+  background: #f3f4f6;
+}
+
+.offer-action-btn.accept {
+  border-color: #86efac;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.offer-action-btn.decline,
+.offer-action-btn.cancel {
+  border-color: #fecaca;
+  background: #fee2e2;
+  color: #7f1d1d;
 }
 
 .empty {

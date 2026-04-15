@@ -127,11 +127,11 @@
             {
               "label": "Meeting Room",
               "value": "meeting_room",
-              "description": "Real-time video/audio like Zoom"
+              "description": "Real-time voice; names shown (no camera)"
             }
           ],
           "path": "Session.Interaction.communicationMedia",
-          "description": "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time video/audio."
+          "description": "Select which communication media to enable. Text: type messages. Audio: voice input with transcription. Meeting Room: real-time voice (no camera)."
         },
         {
           "label": "Awareness Dashboard",

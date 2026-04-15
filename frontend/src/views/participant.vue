@@ -12,6 +12,7 @@ import ActionDialog from '../components/ActionDialog.vue'
 import AnnotationPopup from '../components/AnnotationPopup.vue'
 import { captureActionContextSafe, waitForActionCaptureIdle } from '../composables/useActionCapture.js'
 import { waitForPendingActionLogs } from '../composables/useActionLog.js'
+import { isTypeIndicatorEnabled } from '../utils/interactionConfig.js'
 
 
 defineProps({
@@ -72,6 +73,7 @@ const navigateToPostAnnotationIfNeeded = async () => {
     const res = await fetch(`/api/sessions/${encoded}`, { headers: { 'Content-Type': 'application/json' } })
     if (!res.ok) return
     const session = await res.json()
+    syncMaptaskSessionFlags(session)
     const ann = session.experiment_config?.annotation
     const enabled = ann === true || (ann && ann.enabled)
     if (!enabled) return
@@ -93,6 +95,36 @@ const navigateToPostAnnotationIfNeeded = async () => {
   } catch (e) {
     console.error('[Participant] Error checking post-annotation:', e)
     flushingLogsForPostAnnotation.value = false
+  }
+}
+
+async function submitMaptaskTaskComplete() {
+  const sessionIdentifier = sessionName.value || sessionId.value
+  const pid = sessionStorage.getItem('participant_id')
+  if (!sessionIdentifier || !pid) return
+  maptaskSubmitSubmitting.value = true
+  try {
+    const encoded = encodeURIComponent(sessionIdentifier)
+    const res = await fetch(`/api/sessions/${encoded}/maptask_submit_confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participant_id: pid }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok || !body.success) {
+      console.warn('[Participant] maptask_submit_confirm failed', body)
+      return
+    }
+    maptaskSubmitSelfConfirmed.value = true
+    showMaptaskSubmitModal.value = false
+    if (body.all_confirmed) {
+      sessionEnded.value = true
+      await navigateToPostAnnotationIfNeeded()
+    } else {
+      maptaskSubmitWaitingPartner.value = true
+    }
+  } finally {
+    maptaskSubmitSubmitting.value = false
   }
 }
 
@@ -394,15 +426,16 @@ const messageLengthLimit = computed(() => {
 })
 
 // Communication media: array of 'text' | 'audio' | 'meeting_room' from interaction config
+// Empty array = explicit "no channels" from config (do not default to text).
 const communicationMedia = computed(() => {
   const media = interactionConfig.value?.communicationMedia
-  if (Array.isArray(media) && media.length > 0) {
+  if (Array.isArray(media)) {
     return media
   }
   return ['text']
 })
 
-const typeIndicatorEnabled = computed(() => interactionConfig.value?.typeIndicator === 'enabled')
+const typeIndicatorEnabled = computed(() => isTypeIndicatorEnabled(interactionConfig.value))
 
 // In-session annotation popup state
 const showAnnotationPopup = ref(false)
@@ -412,12 +445,54 @@ const annotationWaitingForPartners = ref(false)
 /** From timer_update: initial_duration_seconds and remaining_seconds (same clock as on-screen timer). */
 const timerInitialDurationSeconds = ref(null)
 const timerLastRemainingSeconds = ref(null)
+/** Backend: map task + in-session annotation → no countdown; end via dual submit. */
+const maptaskUntimedTimer = ref(false)
+const showMaptaskSubmitModal = ref(false)
+const maptaskSubmitSelfConfirmed = ref(false)
+const maptaskSubmitWaitingPartner = ref(false)
+const maptaskSubmitSubmitting = ref(false)
+
+function syncMaptaskSessionFlags(session) {
+  if (!session || typeof session !== 'object') return
+  if ('maptask_untimed_timer' in session) {
+    maptaskUntimedTimer.value = !!session.maptask_untimed_timer
+  }
+  if ('maptask_submit_confirmed_ids' in session) {
+    const pid = sessionStorage.getItem('participant_id')
+    const confirmed = session.maptask_submit_confirmed_ids
+    if (Array.isArray(confirmed) && pid) {
+      maptaskSubmitSelfConfirmed.value = confirmed.includes(pid)
+    } else {
+      maptaskSubmitSelfConfirmed.value = false
+    }
+  }
+}
+
+const showMaptaskSubmitButton = computed(
+  () =>
+    maptaskUntimedTimer.value &&
+    sessionStatus.value === 'running' &&
+    !sessionEnded.value &&
+    !maptaskSubmitSelfConfirmed.value,
+)
+
+function formatCountUpDisplay(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0))
+  const hours = Math.floor(s / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const secs = s % 60
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
 
 // Store cleanup function reference
 let cleanupParticipantsListener = null
 let cleanupMessageListener = null
 let cleanupTimerListener = null
 let cleanupAnnotationListener = null
+let cleanupMaptaskListeners = null
 
 // Handle incoming messages from WebSocket
 const handleMessageReceived = (message) => {
@@ -490,6 +565,10 @@ const participantsUpdateHandler = (data) => {
       currentSessionId: currentSessionId
     })
     return
+  }
+
+  if (data?.session_info) {
+    syncMaptaskSessionFlags(data.session_info)
   }
   
   const myParticipantId = sessionStorage.getItem('participant_id')
@@ -622,9 +701,21 @@ const participantsUpdateHandler = (data) => {
     }
   }
 
+  if (data?.update_type === 'maptask_post_annotation_ready' && data.session_info) {
+    if (!sessionEnded.value) {
+      sessionEnded.value = true
+      navigateToPostAnnotationIfNeeded()
+    }
+  }
+
   // When timer expires: session is paused with remaining_seconds=0 - navigate to post-annotation
   // (fallback if timer_update with 0 was missed)
-  if (data.update_type === 'timer_expired' && data.session_info && !sessionEnded.value) {
+  if (
+    data.update_type === 'timer_expired' &&
+    data.session_info &&
+    !sessionEnded.value &&
+    !maptaskUntimedTimer.value
+  ) {
     const sessionInfo = data.session_info
     const remaining = sessionInfo.remaining_seconds
     if ((remaining === 0 || remaining === '0') && sessionInfo.status === 'paused') {
@@ -663,6 +754,7 @@ const fetchSessionConfig = async () => {
     })
     if (response.ok) {
       const session = await response.json()
+      syncMaptaskSessionFlags(session)
       const et = session.experiment_type || session.experiment_config?.id
       if (et) {
         experimentType.value = et
@@ -1830,19 +1922,39 @@ onMounted(async () => {
             }
           }
 
-            // Update timer display
+          const countUp = data.timer_display_mode === 'count_up'
+
           if (data.remaining_seconds !== undefined && data.remaining_seconds !== null) {
             const totalSeconds = data.remaining_seconds
             const remN = Number(totalSeconds)
             if (Number.isFinite(remN) && remN >= 0) {
               timerLastRemainingSeconds.value = Math.floor(remN)
             }
-            const minutes = Math.floor(totalSeconds / 60)
-            const seconds = totalSeconds % 60
-            timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-            
-            // Check if session has ended (timer reached 0)
-            if (totalSeconds === 0 && !sessionEnded.value) {
+
+            let elapsedForDisplay = null
+            if (data.elapsed_seconds != null && data.elapsed_seconds !== '') {
+              const e = Number(data.elapsed_seconds)
+              if (Number.isFinite(e) && e >= 0) {
+                elapsedForDisplay = Math.floor(e)
+              }
+            }
+            if (
+              elapsedForDisplay == null &&
+              timerInitialDurationSeconds.value != null &&
+              Number.isFinite(remN)
+            ) {
+              elapsedForDisplay = Math.max(0, timerInitialDurationSeconds.value - remN)
+            }
+
+            if (countUp && elapsedForDisplay != null) {
+              timerDisplay.value = formatCountUpDisplay(elapsedForDisplay)
+            } else {
+              const minutes = Math.floor(totalSeconds / 60)
+              const seconds = totalSeconds % 60
+              timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+            }
+
+            if (totalSeconds === 0 && !sessionEnded.value && !countUp) {
               sessionEnded.value = true
               console.log('[Participant] Session ended, checking for final vote')
               // Show final vote popup if configured
@@ -1883,6 +1995,36 @@ onMounted(async () => {
         console.log('[Participant] Registered timer_update listener')
       }
 
+      if (!cleanupMaptaskListeners) {
+        const wsM = getSocket()
+        const onMaptaskSubmitStatus = (payload) => {
+          if (payload?.session_id && payload.session_id !== sessionIdForWebSocket) return
+          const myId = sessionStorage.getItem('participant_id')
+          const confirmed = payload?.confirmed_ids
+          const humanIds = payload?.human_ids
+          if (Array.isArray(confirmed) && myId && confirmed.includes(myId)) {
+            maptaskSubmitSelfConfirmed.value = true
+          }
+          if (Array.isArray(confirmed) && Array.isArray(humanIds) && humanIds.length > 0) {
+            const allDone = humanIds.every((id) => confirmed.includes(id))
+            maptaskSubmitWaitingPartner.value = maptaskSubmitSelfConfirmed.value && !allDone
+          }
+        }
+        const onMaptaskPostAnn = async (payload) => {
+          if (payload?.session_id && payload.session_id !== sessionIdForWebSocket) return
+          if (!sessionEnded.value) {
+            sessionEnded.value = true
+            await navigateToPostAnnotationIfNeeded()
+          }
+        }
+        wsM.on('maptask_submit_status', onMaptaskSubmitStatus)
+        wsM.on('maptask_post_annotation_ready', onMaptaskPostAnn)
+        cleanupMaptaskListeners = () => {
+          wsM.off('maptask_submit_status', onMaptaskSubmitStatus)
+          wsM.off('maptask_post_annotation_ready', onMaptaskPostAnn)
+        }
+      }
+
       // Register annotation popup listener
       if (!cleanupAnnotationListener) {
         const annotationPopupHandler = (data) => {
@@ -1921,6 +2063,15 @@ onMounted(async () => {
         })
         if (response.ok) {
           const session = await response.json()
+          syncMaptaskSessionFlags(session)
+          const et = session.experiment_type || session.experiment_config?.id
+          if (et) {
+            experimentType.value = et
+            sessionStorage.setItem('experiment_type', et)
+            if (et !== 'maptask') {
+              sessionStorage.removeItem('participant_role')
+            }
+          }
           // Update interaction config from session
           if (session.interaction) {
             interactionConfig.value = session.interaction
@@ -1994,6 +2145,10 @@ onUnmounted(() => {
     cleanupAnnotationListener = null
     console.log('[Participant] Cleaned up annotation listener')
   }
+  if (cleanupMaptaskListeners) {
+    cleanupMaptaskListeners()
+    cleanupMaptaskListeners = null
+  }
 })
 </script>
 
@@ -2031,7 +2186,20 @@ onUnmounted(() => {
         </span>
       </div>
       <div class="header-right">
-
+        <button
+          v-if="showMaptaskSubmitButton"
+          type="button"
+          class="maptask-submit-btn"
+          @click="showMaptaskSubmitModal = true"
+        >
+          Submit task
+        </button>
+        <span
+          v-if="maptaskUntimedTimer && maptaskSubmitSelfConfirmed && maptaskSubmitWaitingPartner"
+          class="maptask-waiting-partner"
+        >
+          Waiting for partner to confirm…
+        </span>
         <button @click="logout" class="login-toggle-btn">Logout</button>
       </div>
   </header>
@@ -2127,6 +2295,39 @@ onUnmounted(() => {
     @submit="submitAnnotation"
   />
 
+  <div
+    v-if="showMaptaskSubmitModal"
+    class="modal-overlay maptask-submit-overlay"
+    @click.self="!maptaskSubmitSubmitting && (showMaptaskSubmitModal = false)"
+  >
+    <div class="modal-content maptask-submit-modal" role="dialog" aria-modal="true" @click.stop>
+      <div class="modal-header">
+        <h3>Submit task</h3>
+      </div>
+      <div class="modal-body">
+        <p class="maptask-submit-confirm-text">Please confirm you have finish the task.</p>
+        <div class="maptask-submit-actions">
+          <button
+            type="button"
+            class="step-btn"
+            :disabled="maptaskSubmitSubmitting"
+            @click="showMaptaskSubmitModal = false"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="step-btn primary"
+            :disabled="maptaskSubmitSubmitting"
+            @click="submitMaptaskTaskComplete"
+          >
+            {{ maptaskSubmitSubmitting ? 'Submitting…' : 'Confirm' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Auto Start Popup -->
   <div v-if="showAutoStartPopup" class="modal-overlay auto-start-overlay" @click="closeAutoStartPopup">
     <div class="modal-content auto-start-modal" @click.stop>
@@ -2215,6 +2416,57 @@ onUnmounted(() => {
   flex-direction: row;
   gap: 8px;
   align-items: center;
+}
+
+.header-right {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.maptask-submit-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  cursor: pointer;
+}
+
+.maptask-submit-btn:hover {
+  background: #dbeafe;
+}
+
+.maptask-waiting-partner {
+  font-size: 12px;
+  color: #6b7280;
+  max-width: 168px;
+  line-height: 1.35;
+}
+
+.maptask-submit-overlay {
+  z-index: 12000;
+}
+
+.maptask-submit-modal {
+  max-width: 420px;
+}
+
+.maptask-submit-confirm-text {
+  margin: 0 0 20px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #374151;
+}
+
+.maptask-submit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 /* Map Task: "You are:" plain + role pill */

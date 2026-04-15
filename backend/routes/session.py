@@ -913,8 +913,20 @@ def start_session(session_identifier):
         # Default to 30 minutes if not specified
         if duration_minutes is None:
             duration_minutes = 30
-        
-        duration_seconds = int(duration_minutes) * 60
+
+        from services.annotation_service import (
+            is_maptask_untimed_annotation_session,
+            MAPTASK_UNTIMED_TIMER_SECONDS,
+        )
+
+        if is_maptask_untimed_annotation_session(found_session):
+            duration_seconds = MAPTASK_UNTIMED_TIMER_SECONDS
+            found_session['maptask_untimed_timer'] = True
+            found_session['maptask_submit_confirmed_ids'] = []
+        else:
+            duration_seconds = int(duration_minutes) * 60
+            found_session['maptask_untimed_timer'] = False
+            found_session.pop('maptask_submit_confirmed_ids', None)
         
         # Initialize or update remaining_seconds
         if not found_session.get('remaining_seconds') or found_session.get('status') == 'waiting':
@@ -941,7 +953,10 @@ def start_session(session_identifier):
                     elif not timer.is_running:
                         timer.start()
                 
-                print(f'[Session] Started timer for session {session_id_for_timer}, duration: {duration_minutes} minutes')
+                if found_session.get('maptask_untimed_timer'):
+                    print(f'[Session] Started timer for session {session_id_for_timer}, map task untimed (internal cap {duration_seconds}s)')
+                else:
+                    print(f'[Session] Started timer for session {session_id_for_timer}, duration: {duration_minutes} minutes')
             except Exception as e:
                 print(f'[Session] Error starting timer: {e}')
                 import traceback
@@ -956,7 +971,10 @@ def start_session(session_identifier):
                 if not timer:
                     timer = create_timer(session_id_for_timer, duration_seconds)
                     # Don't start timer - it will be started later after popups complete
-                    print(f'[Session] Created timer for session {session_id_for_timer} (delayed start), duration: {duration_minutes} minutes')
+                    if found_session.get('maptask_untimed_timer'):
+                        print(f'[Session] Created timer for session {session_id_for_timer} (delayed start), map task untimed')
+                    else:
+                        print(f'[Session] Created timer for session {session_id_for_timer} (delayed start), duration: {duration_minutes} minutes')
             except Exception as e:
                 print(f'[Session] Error creating timer: {e}')
                 import traceback
@@ -1014,6 +1032,10 @@ def resume_session(session_identifier):
         # Resume timer
         try:
             from services.timer_service import resume_timer, get_timer
+            from services.annotation_service import (
+                is_maptask_untimed_annotation_session,
+                MAPTASK_UNTIMED_TIMER_SECONDS,
+            )
             session_id_for_timer = found_session.get('session_id') or session_key
             timer = get_timer(session_id_for_timer)
             if timer:
@@ -1026,9 +1048,15 @@ def resume_session(session_identifier):
                 duration_minutes = get_value_from_session_params(found_session, 'Session.Params.duration')
                 if duration_minutes is None:
                     duration_minutes = found_session.get('duration_minutes', 30)
-                duration_seconds = int(duration_minutes) * 60
+                if is_maptask_untimed_annotation_session(found_session):
+                    duration_seconds = MAPTASK_UNTIMED_TIMER_SECONDS
+                    found_session['maptask_untimed_timer'] = True
+                else:
+                    duration_seconds = int(duration_minutes) * 60
+                    found_session['maptask_untimed_timer'] = False
                 timer = create_timer(session_id_for_timer, duration_seconds)
                 timer.start()
+                commit_session(session_key, found_session)
                 print(f'[Session] Created and started timer for session {session_id_for_timer}')
         except Exception as e:
             print(f'[Session] Error resuming timer: {e}')
@@ -1088,8 +1116,19 @@ def reset_session(session_identifier):
             duration_minutes = get_value_from_session_params(found_session, 'Session.Params.duration')
             if duration_minutes is None:
                 duration_minutes = found_session.get('duration_minutes', 30)
-            
-            duration_seconds = int(duration_minutes) * 60
+
+            from services.annotation_service import (
+                is_maptask_untimed_annotation_session,
+                MAPTASK_UNTIMED_TIMER_SECONDS,
+            )
+            if is_maptask_untimed_annotation_session(found_session):
+                duration_seconds = MAPTASK_UNTIMED_TIMER_SECONDS
+                found_session['maptask_untimed_timer'] = True
+                found_session['maptask_submit_confirmed_ids'] = []
+            else:
+                duration_seconds = int(duration_minutes) * 60
+                found_session['maptask_untimed_timer'] = False
+                found_session.pop('maptask_submit_confirmed_ids', None)
             found_session['remaining_seconds'] = duration_seconds
             found_session['duration_minutes'] = duration_minutes
             
@@ -1319,6 +1358,7 @@ def upload_maps(session_identifier):
             session_maps = []
 
         uploaded_maps = []
+        from functions import route_pixel_ratio_from_map_filename
 
         for file in files:
             if file.filename == '':
@@ -1337,14 +1377,17 @@ def upload_maps(session_identifier):
 
             file.save(file_path)
 
+            rpr = route_pixel_ratio_from_map_filename(original_filename)
             map_obj = {
                 'id': map_id,
                 'filename': unique_filename,
                 'original_filename': original_filename,
                 'file_path': f'/api/maps/{unique_filename}',
                 'role': 'guide',
-                'uploaded_at': _utc_now_iso_z()
+                'uploaded_at': _utc_now_iso_z(),
             }
+            if rpr is not None:
+                map_obj['route_pixel_ratio'] = rpr
 
             uploaded_maps.append(map_obj)
             session_maps.append(map_obj)

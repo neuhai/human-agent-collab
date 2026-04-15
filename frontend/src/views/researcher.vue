@@ -4,6 +4,7 @@ import Setup from '../components/setup.vue'
 import Monitor from '../components/monitor.vue'
 import Analysis from '../components/analysis.vue'
 import { joinSession, leaveSession, onMessageReceived, offMessageReceived, onParticipantsUpdate, offParticipantsUpdate, onTypingIndicator, getSocket } from '../services/websocket.js'
+import { isTypeIndicatorEnabled } from '../utils/interactionConfig.js'
 
 // Experiments configuration - loaded from backend API (single source of truth)
 // Fallback used only if API fails; backend experiments.py is the source of truth
@@ -35,7 +36,7 @@ const FALLBACK_EXPERIMENTS = [
         interaction: {
             "Information Flow": [
                 {label: "Communication Level", type: "list", default: "Private Messaging", options: [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], path: 'Session.Interaction.communicationLevel', description: "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time video/audio like Zoom"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
+                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time voice; names shown (no camera)"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
                 {
                   label: "Awareness Dashboard",
                   type: "tiered_checkbox", // 分层的选择
@@ -108,7 +109,7 @@ const FALLBACK_EXPERIMENTS = [
         interaction: {
             "Information Flow": [
                 {label: "Communication Level", type: "list", default: "Private Messaging", options: [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], path: 'Session.Interaction.communicationLevel', description: "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time video/audio like Zoom"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
+                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time voice; names shown (no camera)"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
                 {
                     label: "Awareness Dashboard",
                     type: "tiered_checkbox",
@@ -148,7 +149,7 @@ const FALLBACK_EXPERIMENTS = [
         interaction: {
             "Information Flow": [
                 {label: "Communication Level", type: "list", default: "Private Messaging", options: [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], path: 'Session.Interaction.communicationLevel', description: "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time video/audio like Zoom"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
+                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time voice; names shown (no camera)"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
                 {
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
@@ -186,7 +187,7 @@ const FALLBACK_EXPERIMENTS = [
         interaction: {
             "Information Flow": [
                 {label: "Communication Level", type: "list", default: "Private Messaging", options: [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], path: 'Session.Interaction.communicationLevel', description: "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time video/audio like Zoom"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."}
+                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time voice; names shown (no camera)"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."}
             ],
             "Agent Behaviors": [
                 {label: "Agent Perception Time Window (sec)", type: "number", default: 15, path: 'Session.Interaction.agentPerceptionTimeWindow', description: "Frequency (in seconds) at which agents update their view of the game state."},
@@ -212,7 +213,7 @@ const FALLBACK_EXPERIMENTS = [
         interaction: {
             "Information Flow": [
                 {label: "Communication Level", type: "list", default: "Private Messaging", options: [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], path: 'Session.Interaction.communicationLevel', description: "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time video/audio like Zoom"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."}
+                {label: "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time voice; names shown (no camera)"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."}
             ],
             "Awareness Dashboard": [
                 {
@@ -254,7 +255,7 @@ const FALLBACK_EXPERIMENTS = [
         "interaction": {
             "Information Flow": [
                 {'label': "Communication Level", 'type': "list", 'default': "Private Messaging", 'options': [{"Private Messaging": "Participants can send private one-to-one messages"}, {"Group Chat": "All participants can see and send messages in a group"}, {"No Chat": "Messaging disabled; no communication possible."}], 'path': 'Session.Interaction.communicationLevel', 'description': "Private Messaging: Direct messaging between participants. Group Chat: Public messages visible to all. No Chat: No communication allowed."},
-                {'label': "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time video/audio like Zoom"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
+                {'label': "Communication Media", type: "multi_checkbox", default: ["text"], options: [{label: "Text Message", value: "text", description: "Participants type messages"}, {label: "Audio", value: "audio", description: "Voice input with Whisper transcription"}, {label: "Meeting Room", value: "meeting_room", description: "Real-time voice; names shown (no camera)"}], path: 'Session.Interaction.communicationMedia', description: "Select which communication media to enable."},
                 {
                     'label': "Awareness Dashboard",
                     'type': "tiered_checkbox",
@@ -983,7 +984,7 @@ const handleTimerUpdate = (data) => {
 }
 
 const handleTypingIndicatorPayload = (payload) => {
-  if (interactionConfig.value?.typeIndicator !== 'enabled') return
+  if (!isTypeIndicatorEnabled(interactionConfig.value)) return
   if (!payload?.sender) return
   const sid = String(payload.sender)
   if (typingExpiryTimers[sid]) {

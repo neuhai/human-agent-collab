@@ -35,6 +35,7 @@ For localhost / tunnel targets, this script sets ``PGSSLMODE=disable`` and force
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import re
@@ -156,6 +157,79 @@ def _resolve_session_ids(session_name: str) -> List[str]:
     return ids
 
 
+def _build_participant_name_map(participant_ids: List[str], human_actions: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Map participant_id -> readable participant name; keep keys unique."""
+    base_names: Dict[str, str] = {}
+    for pid in participant_ids:
+        base_names[pid] = ''
+    for e in human_actions:
+        pid = e.get('participant_id')
+        if not pid or pid not in base_names:
+            continue
+        nm = (e.get('participant_name') or '').strip()
+        if nm and not base_names[pid]:
+            base_names[pid] = nm
+
+    unnamed_index = 1
+    for pid in participant_ids:
+        if not base_names[pid]:
+            base_names[pid] = f'participant {unnamed_index}'
+            unnamed_index += 1
+
+    # De-duplicate same visible names by appending a short id suffix.
+    counts = collections.Counter(base_names.values())
+    out: Dict[str, str] = {}
+    for pid in participant_ids:
+        nm = base_names[pid]
+        if counts[nm] > 1:
+            out[pid] = f'{nm} ({pid[:8]})'
+        else:
+            out[pid] = nm
+    return out
+
+
+def _format_in_session_by_participant(
+    in_session_all: List[Dict[str, Any]], participant_name_by_id: Dict[str, str]
+) -> Dict[str, Dict[str, str]]:
+    out: Dict[str, Dict[str, str]] = {}
+    for r in in_session_all:
+        pid = r.get('participant_id')
+        if not pid:
+            continue
+        participant_name = participant_name_by_id.get(pid, pid)
+        checkpoint_key = f"checkpoint {r.get('checkpoint_index')}"
+        out.setdefault(participant_name, {})[checkpoint_key] = r.get('transcription') or ''
+    return out
+
+
+def _format_post_timeline_for_participant(
+    actions: List[Dict[str, Any]],
+    annotations_payload: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Return timeline sorted by action timestamp with compact annotation fields."""
+    timeline: List[Dict[str, Any]] = []
+    for a in actions:
+        action_id = a.get('action_id')
+        ann = annotations_payload.get(action_id, {}) if action_id else {}
+        if not isinstance(ann, dict):
+            ann = {}
+        timeline.append(
+            {
+                'action_timestamp': a.get('timestamp') or '',
+                'action_type': a.get('action_type') or '',
+                'action_content': a.get('action_content') or '',
+                'annotation': {
+                    'explanation_transcription': ann.get('momentExplanationTranscript') or '',
+                    'task_model_q1': ann.get('q1') or '',
+                    'partner_model_q2': ann.get('q2') or '',
+                    'self_model_q3': ann.get('q3') or '',
+                    'alignment_q4': ann.get('q4') or '',
+                },
+            }
+        )
+    return timeline
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Export session actions and annotations')
     g = parser.add_mutually_exclusive_group(required=True)
@@ -248,15 +322,22 @@ def main() -> int:
         if pid:
             pid_set.add(pid)
     participant_ids = sorted(pid_set)
+    participant_name_by_id = _build_participant_name_map(participant_ids, human_actions)
+    participant_names = [participant_name_by_id[pid] for pid in participant_ids]
 
-    by_pid: Dict[str, Dict[str, Any]] = {}
+    by_participant: Dict[str, Dict[str, Any]] = {}
     for pid in participant_ids:
-        by_pid[pid] = {
+        p_name = participant_name_by_id[pid]
+        p_actions = [e for e in human_actions if e.get('participant_id') == pid]
+        p_post_payload = next(
+            (r.get('payload') or {} for r in post_all if r.get('participant_id') == pid),
+            {},
+        )
+        by_participant[p_name] = {
             'human_actions': [e for e in human_actions if e.get('participant_id') == pid],
             'in_session_annotations': [r for r in in_session_all if r.get('participant_id') == pid],
-            'post_session_annotations': next(
-                (r.get('payload') or {} for r in post_all if r.get('participant_id') == pid),
-                {},
+            'post_session_annotations_timeline': _format_post_timeline_for_participant(
+                p_actions, p_post_payload
             ),
         }
 
@@ -264,10 +345,20 @@ def main() -> int:
         'session_name': name_for_json,
         'session_id': session_id,
         'participant_ids': participant_ids,
+        'participant_names': participant_names,
+        'participant_name_by_id': participant_name_by_id,
         'human_actions_all': human_actions,
-        'in_session_annotations_all': in_session_all,
-        'post_session_annotations_rows': post_all,
-        'by_participant': by_pid,
+        'in_session_annotations_all': _format_in_session_by_participant(
+            in_session_all, participant_name_by_id
+        ),
+        'post_session_annotations': {
+            participant_name_by_id[pid]: _format_post_timeline_for_participant(
+                [e for e in human_actions if e.get('participant_id') == pid],
+                next((r.get('payload') or {} for r in post_all if r.get('participant_id') == pid), {}),
+            )
+            for pid in participant_ids
+        },
+        'by_participant': by_participant,
     }
 
     with open(bundle_path, 'w', encoding='utf-8') as f:

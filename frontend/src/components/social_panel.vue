@@ -69,35 +69,72 @@ const isVisible = computed(() => {
     return props.config.visible_if === 'true' || props.config.visible_if === true
 })
 
+const hasTextMedia = computed(() => (props.communicationMedia || ['text']).includes('text'))
+const hasAudioMedia = computed(() => (props.communicationMedia || []).includes('audio'))
+const hasMeetingRoomMedia = computed(() => (props.communicationMedia || []).includes('meeting_room'))
+/** Text off but meeting on: show Chat tab for MeetingRoom without requiring a selected participant */
+const meetingOnlyNoText = computed(() => hasMeetingRoomMedia.value && !hasTextMedia.value)
+
+/** Config may use tab id `messages` or `chat` — keep one canonical id for switching */
+function resolveChatTabId(tabIds) {
+    if (tabIds.includes('messages')) return 'messages'
+    if (tabIds.includes('chat')) return 'chat'
+    return null
+}
+
 // Get tabs from config, default to ['trade', 'messages']
-// Filter out 'messages' tab if communication level is 'no_chat'
+// Filter out 'messages' tab if communication level is 'no_chat' or text channel is disabled
 const tabs = computed(() => {
     const configTabs = props.config.tabs || ['trade', 'messages']
     const isNoChat = props.commLevel === 'no_chat' || props.commLevel === 'noChat'
     
-    // If no_chat, remove messages tab
-    const filteredTabs = isNoChat 
+    let filteredTabs = isNoChat
         ? configTabs.filter(tab => {
             const tabId = typeof tab === 'string' ? tab : tab.id
-            return tabId !== 'messages'
+            return tabId !== 'messages' && tabId !== 'chat'
           })
         : configTabs
-    
+
+    // Hide the chat tab only when there is no text chat *and* no meeting room (otherwise meeting UI lives here).
+    if (!hasTextMedia.value && !hasMeetingRoomMedia.value) {
+      filteredTabs = filteredTabs.filter(tab => {
+        const tabId = typeof tab === 'string' ? tab : tab.id
+        return tabId !== 'messages' && tabId !== 'chat'
+      })
+    }
+
     return filteredTabs.map(tab => {
         if (typeof tab === 'string') {
-            return { id: tab, label: tab.charAt(0).toUpperCase() + tab.slice(1) }
+            const id = tab
+            const label =
+                id === 'messages' || id === 'chat'
+                    ? 'Chat'
+                    : id.charAt(0).toUpperCase() + id.slice(1)
+            return { id, label }
         }
-        return tab
+        const id = tab.id
+        return {
+            ...tab,
+            label: tab.label || (id === 'messages' || id === 'chat' ? 'Chat' : id)
+        }
     })
 })
 
-// Initialize activeTab: if trade tab exists, default to trade, otherwise default to messages
+// Initialize activeTab: prefer Chat when meeting is enabled but text is not (enter MeetingRoom without picking a peer)
 const getDefaultTab = () => {
-    const tabIds = tabs.value.map(t => t.id)
+    const tabIds = tabs.value.map((t) => t.id)
+    const chatId = resolveChatTabId(tabIds)
+    const preferChat =
+        hasMeetingRoomMedia.value &&
+        !hasTextMedia.value &&
+        Boolean(chatId)
+    if (preferChat && chatId) {
+        return chatId
+    }
     if (tabIds.includes('trade')) {
         return 'trade'
-    } else if (tabIds.includes('messages')) {
-        return 'messages'
+    } else if (chatId) {
+        return chatId
     }
     return tabs.value[0]?.id || 'trade'
 }
@@ -107,6 +144,11 @@ const activeTab = ref(getDefaultTab())
 const setActiveTab = (tabId) => {
     activeTab.value = tabId
 }
+
+const isChatTabActive = computed(() => {
+    const a = activeTab.value
+    return a === 'messages' || a === 'chat'
+})
 
 // Watch tabs changes and adjust activeTab if current tab is removed
 watch(tabs, (newTabs) => {
@@ -277,11 +319,6 @@ const selectedParticipantId = computed(() => props.selectedParticipant || select
 // ---- Chat box state (matches setup.vue look & feel) ----
 const newMessage = ref('')
 const localConversations = ref({})
-
-// Communication media helpers
-const hasTextMedia = computed(() => (props.communicationMedia || ['text']).includes('text'))
-const hasAudioMedia = computed(() => (props.communicationMedia || []).includes('audio'))
-const hasMeetingRoomMedia = computed(() => (props.communicationMedia || []).includes('meeting_room'))
 
 // Voice recording for audio media
 const isRecording = ref(false)
@@ -814,10 +851,9 @@ const selectParticipant = (participant, isAutoSelect = false) => {
 
     // Only change tab when user manually clicks a participant (not during auto-select)
     if (!isAutoSelect) {
-        // If user clicks a participant, default to messages tab (if present)
-        const hasMessagesTab = tabs.value.some(t => t.id === 'messages')
-        if (hasMessagesTab) {
-            activeTab.value = 'messages'
+        const chatId = resolveChatTabId(tabs.value.map((t) => t.id))
+        if (chatId) {
+            activeTab.value = chatId
         }
     }
 }
@@ -994,7 +1030,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-    <Panel v-if="isVisible" :header="'Participants'" :description="config.description || 'View and interact with other participants.'" class="participant-list">
+  <div class="social-panel-root">
+    <Panel v-if="isVisible" :header="'Participants'" :description="config.description || 'View and interact with other participants.'" class="participant-list participant-panel-sidebar">
         <div class="participants-list">
             <div
                 v-for="p in otherParticipants"
@@ -1020,8 +1057,9 @@ onUnmounted(() => {
             <button
                 v-for="tab in tabs"
                 :key="tab.id"
+                type="button"
                 :class="['tab-button', { active: activeTab === tab.id }]"
-                @click="setActiveTab(tab.id)"
+                @click.stop.prevent="setActiveTab(tab.id)"
             >
                 {{ tab.label }}
             </button>
@@ -1101,27 +1139,27 @@ onUnmounted(() => {
                     @offer-updated="handleOfferUpdated"
                 />
             </div>
-            <!-- Messages tab: render chat box UI (match setup.vue styles) -->
-            <div v-else class="tab-content" data-tab="message">
+            <!-- Chat tab (id: messages or chat): chat UI + optional MeetingRoom -->
+            <div v-else-if="isChatTabActive" class="chat-tab-panel" data-tab="chat">
                 <div v-if="commLevel === 'no_chat'" class="empty">
                     Messaging disabled
                 </div>
 
                 <div
-                    v-else-if="!selectedParticipantId && !(commLevel === 'groupChat' || commLevel === 'group_chat')"
+                    v-else-if="!selectedParticipantId && !(commLevel === 'groupChat' || commLevel === 'group_chat') && !meetingOnlyNoText"
                     class="empty"
                 >
                     No participant selected
                 </div>
 
-                <div v-else :class="['chat-mode', { 'meeting-room-layout': hasMeetingRoomMedia }]">
-                    <!-- When meeting room: collapsible chat. Default = meeting full, click to unfold chat -->
-                    <div v-if="hasMeetingRoomMedia" class="chat-toggle-bar">
+                <div v-else :class="['chat-mode', { 'meeting-room-layout': hasMeetingRoomMedia, 'meeting-only': hasMeetingRoomMedia && !hasTextMedia }]">
+                    <!-- When meeting room + text: collapsible chat. Default = meeting full, click to unfold chat -->
+                    <div v-if="hasTextMedia && hasMeetingRoomMedia" class="chat-toggle-bar">
                         <button type="button" class="chat-toggle-btn" :class="{ active: chatUnfolded }" @click="chatUnfolded = !chatUnfolded">
                             {{ chatUnfolded ? '▼ Collapse Chat' : '▲ Open Chat' }}
                         </button>
                     </div>
-                    <div v-if="!hasMeetingRoomMedia || chatUnfolded" class="chat-section" :class="{ 'chat-one-third': hasMeetingRoomMedia && chatUnfolded }">
+                    <div v-if="hasTextMedia && (!hasMeetingRoomMedia || chatUnfolded)" class="chat-section" :class="{ 'chat-one-third': hasMeetingRoomMedia && chatUnfolded }">
                     <div class="message-thread-wrap">
                         <div class="message-history" ref="messageHistoryEl" @scroll="onMessageHistoryScroll">
                         <template v-for="message in messagesForSelected" :key="message.id">
@@ -1203,7 +1241,14 @@ onUnmounted(() => {
                         <button @click="sendMessage" class="send-btn">Send</button>
                     </div>
                     </div>
-                    <div v-if="hasMeetingRoomMedia" class="meeting-section" :class="{ 'meeting-two-thirds': chatUnfolded }">
+                    <div
+                        v-if="hasMeetingRoomMedia"
+                        class="meeting-section"
+                        :class="{
+                          'meeting-two-thirds': hasTextMedia && chatUnfolded,
+                          'meeting-full-bleed': !hasTextMedia
+                        }"
+                    >
                         <MeetingRoom
                             :session-id="sessionId"
                             :participant-id="myParticipantId"
@@ -1214,31 +1259,56 @@ onUnmounted(() => {
             </div>
         </div>
     </div>
+  </div>
 </template>
 
 <style scoped>
+/* Side-by-side: prevent Participants panel from overlapping Trade/Chat (clicks were lost on tabs) */
+.social-panel-root {
+    display: flex;
+    flex-direction: row;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    gap: 10px;
+    align-items: stretch;
+}
+.social-panel-root :deep(.participant-panel-sidebar) {
+    flex: 0 1 40%;
+    max-width: 48%;
+    min-width: 140px;
+}
 .interaction-box {
     width: 100%;
     background-color: #ffffff;
     display: flex;
     flex-direction: column;
-    flex: 4;
+    flex: 4 1 0%;
+    min-width: 160px;
     height: 100%;
     min-height: 0;
     overflow: hidden;
     border-radius: 10px;
     border: 1px solid #e5e7eb;
     margin-bottom: 0;
+    position: relative;
+    z-index: 2;
 }
 
 .tab-header {
     display: flex;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 3;
     border-bottom: 2px solid #e5e7eb;
     background: #f9fafb;
 }
 
 .tab-button {
     flex: 1;
+    min-width: 0;
     padding: 9px 12px 8px 12px;
     border: none;
     background: transparent;
@@ -1248,6 +1318,8 @@ onUnmounted(() => {
     color: #6b7280;
     transition: all 0.2s ease;
     border-bottom: 3px solid transparent;
+    position: relative;
+    z-index: 1;
 }
 
 .tab-button:hover {
@@ -1267,6 +1339,14 @@ onUnmounted(() => {
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+.chat-tab-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 /* ----- Chat box styles (copied to match setup.vue) ----- */
@@ -1322,11 +1402,15 @@ onUnmounted(() => {
 .meeting-section {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
 }
 .meeting-section.meeting-two-thirds {
   flex: 0 0 50%;
   min-height: 200px;
+}
+.meeting-section.meeting-full-bleed {
+  flex: 1;
+  min-height: 240px;
 }
 
 .message-thread {
@@ -1526,6 +1610,8 @@ onUnmounted(() => {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   font-size: 13px;
+  background-color: #fff;
+  color: #111827;
 }
 
 .send-btn {

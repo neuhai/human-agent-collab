@@ -184,15 +184,22 @@ class TimerService:
                 except Exception as ann_err:
                     print(f'[TimerService] Error in forced annotation check: {ann_err}')
 
-            # Broadcast timer update
-            socketio.emit('timer_update', {
+            elapsed = max(0, int(self.initial_duration) - int(self.remaining_seconds))
+            payload = {
                 'session_id': self.session_id,
                 'remaining_seconds': self.remaining_seconds,
                 'initial_duration_seconds': self.initial_duration,
+                'elapsed_seconds': elapsed,
                 'formatted': self._format_time(self.remaining_seconds),
                 'is_running': self.is_running and not self.is_paused,
-                'is_paused': self.is_paused
-            }, room=self.session_id)
+                'is_paused': self.is_paused,
+            }
+            if found_session and found_session.get('maptask_untimed_timer'):
+                payload['timer_display_mode'] = 'count_up'
+                payload['formatted'] = self._format_time(elapsed)
+
+            # Broadcast timer update
+            socketio.emit('timer_update', payload, room=self.session_id)
             
         except Exception as e:
             print(f'[TimerService] Error broadcasting timer update: {e}')
@@ -213,14 +220,17 @@ class TimerService:
             # (the countdown loop breaks before _broadcast_update, so we'd otherwise never send 0)
             try:
                 socketio = get_socketio()
-                socketio.emit('timer_update', {
+                final_elapsed = max(0, int(self.initial_duration) - int(self.remaining_seconds))
+                final_payload = {
                     'session_id': self.session_id,
                     'remaining_seconds': 0,
                     'initial_duration_seconds': self.initial_duration,
+                    'elapsed_seconds': final_elapsed,
                     'formatted': '00:00',
                     'is_running': False,
-                    'is_paused': True
-                }, room=self.session_id)
+                    'is_paused': True,
+                }
+                socketio.emit('timer_update', final_payload, room=self.session_id)
             except Exception as e:
                 print(f'[TimerService] Error emitting final timer_update: {e}')
             

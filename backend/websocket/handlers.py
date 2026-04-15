@@ -385,7 +385,7 @@ def register_handlers(socketio):
             else:
                 # Private message: send to sender and receiver only
                 socketio.emit('message_received', message, room=room_id)
-            
+
             # Action log (human only gets screenshot/html_snapshot)
             is_human_sender = (sender_type or '').lower() not in ('ai', 'ai_agent')
             from services.action_logger import log_action
@@ -418,7 +418,11 @@ def register_handlers(socketio):
                         trigger_annotation,
                     )
                     should_trigger, checkpoint = should_trigger_annotation(
-                        session_key, found_session, sender, 'send_message'
+                        session_key,
+                        found_session,
+                        sender,
+                        'send_message',
+                        client_timestamp=received_ts,
                     )
                     if should_trigger and checkpoint is not None:
                         trigger_annotation(session_key, found_session, checkpoint, sessions)
@@ -616,6 +620,43 @@ def register_handlers(socketio):
                 }, room=target_socket)
         except Exception as e:
             print(f'[Meeting] Signal error: {e}')
+
+    @socketio.on('meeting_transcript_share')
+    def handle_meeting_transcript_share(data):
+        """Broadcast Realtime input transcription from one human to other meeting participants."""
+        try:
+            session_identifier = data.get('session_id')
+            participant_id = data.get('participant_id')
+            text = (data.get('text') or '').strip()
+            if not session_identifier or not participant_id or not text:
+                return
+            import routes.session as session_module
+            sessions = session_module.sessions
+            actual_session_id = None
+            for sid, session in sessions.items():
+                if (
+                    session.get('session_id') == session_identifier
+                    or sid == session_identifier
+                    or session.get('session_name') == session_identifier
+                ):
+                    actual_session_id = session.get('session_id') or sid
+                    break
+            if not actual_session_id:
+                actual_session_id = session_identifier
+            room_id = actual_session_id
+            socket_inst = get_socketio()
+            socket_inst.emit(
+                'meeting_transcript',
+                {
+                    'session_id': actual_session_id,
+                    'participant_id': participant_id,
+                    'text': text,
+                },
+                room=room_id,
+                include_self=False,
+            )
+        except Exception as e:
+            print(f'[Meeting] Transcript share error: {e}')
 
 
 def broadcast_participant_update(session_id, participants, session_info=None, update_type='full'):

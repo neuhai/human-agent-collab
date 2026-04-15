@@ -53,10 +53,14 @@ const participantConfigs = computed(() => {
             // Extract field name from path (e.g., 'Participant.name' -> 'name')
             const fieldName = path.split('.').slice(1).join('.')
             
-            // Get value from participant object (check both top-level and experiment_params)
-            let value = participant[fieldName]
-            if (value === undefined && participant.experiment_params) {
+            // Get value from participant object.
+            // Prefer experiment_params for experiment-derived fields (e.g., order_progress) to avoid
+            // stale/conflicting top-level fields in payloads.
+            let value = undefined
+            if (participant.experiment_params && participant.experiment_params[fieldName] !== undefined) {
                 value = participant.experiment_params[fieldName]
+            } else {
+                value = participant[fieldName]
             }
             
             return {

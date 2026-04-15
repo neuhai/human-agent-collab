@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import MapDisplay from './MapDisplay.vue'
 import MapToolbox from './MapToolbox.vue'
 import { logActionToBackend } from '../composables/useActionLog.js'
+import { computeRoutePixelRatioFromCanvas } from '../utils/mapRoutePixelRatio.js'
 
 const props = defineProps({
   map: {
@@ -405,6 +406,8 @@ const syncMapProgress = async () => {
   } else if (mapType.value === 'image' && canvasRef.value) {
     try {
       mapProgress.canvasDataUrl = canvasRef.value.toDataURL('image/png')
+      const rpr = computeRoutePixelRatioFromCanvas(canvasRef.value)
+      if (rpr != null) mapProgress.route_pixel_ratio = rpr
     } catch {
       return
     }

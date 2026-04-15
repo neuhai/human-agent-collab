@@ -24,13 +24,27 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'submit'])
 
-const QUESTIONS = [
-  'What do you think the group (you and your partner) has been trying to do?',
-  'What do you think your partner have been trying to do?',
-  'What are you trying to do next?'
-]
+const participantRole = computed(() => (sessionStorage.getItem('participant_role') || '').trim().toLowerCase())
 
-const INSTRUCTION = 'Please briefly answer the three questions.\nClick on the button to start recording.'
+const sincePhrase = computed(() =>
+  props.checkpointIndex === 0 ? 'since the session starts' : 'since the last checkpoint'
+)
+
+const roleSpecificQuestion = computed(() => {
+  const s = sincePhrase.value
+  if (participantRole.value === 'follower') return `What has the guide been trying to do ${s}?`
+  if (participantRole.value === 'guide') return `What has the follower been trying to do ${s}?`
+  return 'What have you and your partner been trying to do ${s}?'
+})
+
+const QUESTIONS = computed(() => [
+  `What have you and your partner been trying to do ${sincePhrase.value}?`,
+  'How do you think you and your partner did?',
+  roleSpecificQuestion.value,
+  'What do you plan to do next?'
+])
+
+const INSTRUCTION = 'Please briefly answer the four questions.\nClick on the button to start recording.'
 
 const isRecording = ref(false)
 const mediaRecorder = ref(null)
@@ -190,6 +204,7 @@ const handleClose = () => {
 }
 
 .annotation-modal {
+  color-scheme: light;
   background: white;
   border-radius: 12px;
   max-width: 580px;
@@ -391,6 +406,7 @@ const handleClose = () => {
   width: 100%;
   font-size: 15px;
   color: #111827;
+  background-color: #fff;
   margin-bottom: 16px;
   padding: 12px;
   line-height: 1.5;
