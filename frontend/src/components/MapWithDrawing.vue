@@ -106,6 +106,10 @@ const logMapAction = (actionType, actionContent, extraMetadata = {}) => {
     let metadata = { ...extraMetadata }
     if (props.showToolbox) {
       mapImage = getMapImage()
+      if (mapType.value === 'image' && canvasRef.value) {
+        const rpr = computeRoutePixelRatioFromCanvas(canvasRef.value)
+        if (rpr != null) metadata = { ...metadata, route_pixel_ratio: rpr }
+      }
       if (mapType.value === 'txt' && filledCells.value.size > 0) {
         metadata = { ...metadata, filledCells: [...filledCells.value] }
       }
