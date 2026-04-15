@@ -383,10 +383,65 @@ const activeTab = ref('setup')
 
 // Timer and session state (placeholder - to be connected to backend)
 const timerDisplay = ref('00:00')
+const timerInitialDurationSeconds = ref(null)
+const timerLastRemainingSeconds = ref(null)
 const isSessionCreated = ref(false)
 const currentSessionId = ref('')
 const currentSessionName = ref('')
 const experimentStatus = ref('waiting') // 'waiting', 'running', 'paused'
+
+function formatCountUpDisplay(totalSeconds) {
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0))
+  const hours = Math.floor(s / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const secs = s % 60
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+function updateTimerDisplay(sessionLike) {
+  if (!sessionLike || sessionLike.remaining_seconds === undefined || sessionLike.remaining_seconds === null) {
+    return
+  }
+
+  if (sessionLike.initial_duration_seconds != null && sessionLike.initial_duration_seconds !== '') {
+    const idur = Number(sessionLike.initial_duration_seconds)
+    if (Number.isFinite(idur) && idur >= 0) {
+      timerInitialDurationSeconds.value = Math.floor(idur)
+    }
+  }
+
+  const remN = Number(sessionLike.remaining_seconds)
+  if (!Number.isFinite(remN) || remN < 0) {
+    return
+  }
+  timerLastRemainingSeconds.value = Math.floor(remN)
+
+  const countUp = sessionLike.timer_display_mode === 'count_up'
+  let elapsedForDisplay = null
+
+  if (sessionLike.elapsed_seconds != null && sessionLike.elapsed_seconds !== '') {
+    const e = Number(sessionLike.elapsed_seconds)
+    if (Number.isFinite(e) && e >= 0) {
+      elapsedForDisplay = Math.floor(e)
+    }
+  }
+
+  if (elapsedForDisplay == null && timerInitialDurationSeconds.value != null) {
+    elapsedForDisplay = Math.max(0, timerInitialDurationSeconds.value - remN)
+  }
+
+  if (countUp && elapsedForDisplay != null) {
+    timerDisplay.value = formatCountUpDisplay(elapsedForDisplay)
+    return
+  }
+
+  const minutes = Math.floor(remN / 60)
+  const seconds = remN % 60
+  timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
 
 // Real-time data for monitor tab
 const conversations = ref({}) // Format: { "from_to": [messages] }
@@ -718,13 +773,7 @@ watch([currentSessionId, currentSessionName, isSessionCreated], async () => {
             console.log(`[Researcher] Loaded session status: ${session.status}`)
           }
           
-          // Update timer if remaining_seconds is provided
-          if (session.remaining_seconds !== undefined && session.remaining_seconds !== null) {
-            const totalSeconds = session.remaining_seconds
-            const minutes = Math.floor(totalSeconds / 60)
-            const seconds = totalSeconds % 60
-            timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-          }
+          updateTimerDisplay(session)
         }
       } catch (error) {
         console.error('[Researcher] Error fetching session config:', error)
@@ -918,13 +967,7 @@ const handleParticipantsUpdate = (data) => {
       console.log('[Researcher] Session status updated via WebSocket:', sessionInfo.status)
     }
     
-    // Update timer if remaining_seconds is provided
-    if (sessionInfo.remaining_seconds !== undefined && sessionInfo.remaining_seconds !== null) {
-      const totalSeconds = sessionInfo.remaining_seconds
-      const minutes = Math.floor(totalSeconds / 60)
-      const seconds = totalSeconds % 60
-      timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    }
+    updateTimerDisplay(sessionInfo)
     
     // Also update trades from session_info if available
     if (sessionInfo.pending_offers && Array.isArray(sessionInfo.pending_offers)) {
@@ -969,11 +1012,8 @@ const handleTimerUpdate = (data) => {
   
   // Update timer display
   if (data.remaining_seconds !== undefined && data.remaining_seconds !== null) {
-    const totalSeconds = data.remaining_seconds
-    const minutes = Math.floor(totalSeconds / 60)
-    const seconds = totalSeconds % 60
-    timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    
+    updateTimerDisplay(data)
+
     // Update experiment status if timer is paused
     if (data.is_paused && experimentStatus.value === 'running') {
       experimentStatus.value = 'paused'

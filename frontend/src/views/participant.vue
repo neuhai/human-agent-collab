@@ -416,6 +416,12 @@ const normalizeTimestamp = (ts) => {
   return 0
 }
 
+const normalizeId = (id) => {
+  if (id === null || id === undefined) return null
+  const v = String(id).trim()
+  return v === '' ? null : v
+}
+
 // Message length limit (word count) when enabled in interaction config
 const messageLengthLimit = computed(() => {
   const ml = interactionConfig.value?.messageLength
@@ -498,8 +504,8 @@ let cleanupMaptaskListeners = null
 const handleMessageReceived = (message) => {
   console.log('[Participant] Received message:', message)
   
-  const sender = message.sender
-  const receiver = message.receiver // null for group chat
+  const sender = normalizeId(message.sender)
+  const receiver = normalizeId(message.receiver) // null for group chat
   
   // Convert backend message format to frontend format
   const msg = {

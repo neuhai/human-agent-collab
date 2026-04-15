@@ -207,6 +207,15 @@ def _format_post_timeline_for_participant(
     annotations_payload: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """Return timeline sorted by action timestamp with compact annotation fields."""
+    def _pick_q_value(ann: Dict[str, Any], q_key: str) -> str:
+        label_id = (ann.get(f'{q_key}LabelId') or '').strip().lower()
+        label_value = (ann.get(q_key) or '').strip()
+        if label_id == 'other' or label_value.lower() == 'other':
+            other_text = (ann.get(f'{q_key}OtherText') or '').strip()
+            if other_text:
+                return other_text
+        return label_value
+
     timeline: List[Dict[str, Any]] = []
     for a in actions:
         action_id = a.get('action_id')
@@ -220,9 +229,9 @@ def _format_post_timeline_for_participant(
                 'action_content': a.get('action_content') or '',
                 'annotation': {
                     'explanation_transcription': ann.get('momentExplanationTranscript') or '',
-                    'task_model_q1': ann.get('q1') or '',
-                    'partner_model_q2': ann.get('q2') or '',
-                    'self_model_q3': ann.get('q3') or '',
+                    'task_model_q1': _pick_q_value(ann, 'q1'),
+                    'partner_model_q2': _pick_q_value(ann, 'q2'),
+                    'self_model_q3': _pick_q_value(ann, 'q3'),
                     'alignment_q4': ann.get('q4') or '',
                 },
             }

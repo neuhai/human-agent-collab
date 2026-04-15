@@ -572,6 +572,12 @@ const normalizeTimestamp = (ts) => {
     return 0
 }
 
+const normalizeId = (id) => {
+    if (id === null || id === undefined) return null
+    const v = String(id).trim()
+    return v === '' ? null : v
+}
+
 const playAudio = (url) => {
     if (!url) return
     const fullUrl = url.startsWith('http') ? url : (window.location.origin + url)
@@ -580,8 +586,8 @@ const playAudio = (url) => {
 }
 
 const messagesForSelected = computed(() => {
-    const myId = myParticipantId.value
-    const otherId = selectedParticipantId.value
+    const myId = normalizeId(myParticipantId.value)
+    const otherId = normalizeId(selectedParticipantId.value)
     const conv = localConversations.value || {}
     const all = []
 
@@ -604,8 +610,8 @@ const messagesForSelected = computed(() => {
     for (const msgs of Object.values(conv)) {
         if (!Array.isArray(msgs)) continue
         for (const m of msgs) {
-            const from = m?.from || m?.sender
-            const to = m?.to || m?.receiver
+            const from = normalizeId(m?.from || m?.sender)
+            const to = normalizeId(m?.to || m?.receiver)
             const isPair =
                 (from === myId && to === otherId) ||
                 (from === otherId && to === myId)
@@ -862,9 +868,9 @@ const selectParticipant = (participant, isAutoSelect = false) => {
 const handleMessageReceived = (message) => {
     console.log('[SocialPanel] Received message:', message)
     
-    const myId = myParticipantId.value
-    const sender = message.sender
-    const receiver = message.receiver
+    const myId = normalizeId(myParticipantId.value)
+    const sender = normalizeId(message.sender)
+    const receiver = normalizeId(message.receiver)
     const isGroupChat = props.commLevel === 'groupChat' || props.commLevel === 'group_chat'
     let conversationMutated = false
 
@@ -979,7 +985,7 @@ const handleMessageReceived = (message) => {
         }
     }
 
-    if (conversationMutated && myId && String(sender) === String(myId)) {
+    if (conversationMutated && myId && sender === myId) {
         flushScrollToBottom()
     }
 }
