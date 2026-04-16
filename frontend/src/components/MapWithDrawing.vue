@@ -281,6 +281,50 @@ const mounted = ref(true)
 const ERASER_RADIUS_MIN = 4
 const ERASER_RADIUS_MAX = 72
 
+/** Resize/layout observer so the drawing layer stays aligned with the centered map image. */
+let canvasLayoutObserver = null
+
+const teardownCanvasLayoutObserver = () => {
+  if (canvasLayoutObserver) {
+    canvasLayoutObserver.disconnect()
+    canvasLayoutObserver = null
+  }
+}
+
+/**
+ * Overlay the canvas on the visible .map-image (same buffer as naturalWidth × naturalHeight).
+ * Without this, CSS pins the canvas to top-left while the image is flex-centered — strokes
+ * do not match the map and route_pixel_ratio is wrong for annotation checkpoints.
+ */
+const syncCanvasLayoutToImage = () => {
+  if (!mounted.value || mapType.value !== 'image' || !props.showToolbox) return
+  const inner = containerRef.value?.querySelector('.map-inner')
+  const canvas = canvasRef.value
+  const img = inner?.querySelector('.map-image')
+  if (!inner || !canvas || !img || !img.complete || !img.naturalWidth) return
+
+  const innerRect = inner.getBoundingClientRect()
+  const imgRect = img.getBoundingClientRect()
+  const left = imgRect.left - innerRect.left + inner.scrollLeft
+  const top = imgRect.top - innerRect.top + inner.scrollTop
+
+  canvas.style.left = `${Math.round(left)}px`
+  canvas.style.top = `${Math.round(top)}px`
+  canvas.style.width = `${imgRect.width}px`
+  canvas.style.height = `${imgRect.height}px`
+}
+
+const setupCanvasLayoutObserver = () => {
+  teardownCanvasLayoutObserver()
+  const inner = containerRef.value?.querySelector('.map-inner')
+  if (!inner || typeof ResizeObserver === 'undefined') return
+  canvasLayoutObserver = new ResizeObserver(() => {
+    requestAnimationFrame(() => syncCanvasLayoutToImage())
+  })
+  canvasLayoutObserver.observe(inner)
+  if (containerRef.value) canvasLayoutObserver.observe(containerRef.value)
+}
+
 const initCanvas = () => {
   if (!mounted.value || !containerRef.value || !canvasRef.value || mapType.value !== 'image') return
   const img = containerRef.value.querySelector('.map-image')
@@ -290,13 +334,15 @@ const initCanvas = () => {
     const canvas = canvasRef.value
     canvas.width = img.naturalWidth
     canvas.height = img.naturalHeight
-    canvas.style.width = img.offsetWidth + 'px'
-    canvas.style.height = img.offsetHeight + 'px'
     canvasCtx.value = canvas.getContext('2d')
     canvasImage.value = img
     canvasUndoStack.value = []
     pushCanvasUndoState()
     restoreImageDrawingLocally()
+    requestAnimationFrame(() => {
+      syncCanvasLayoutToImage()
+      setupCanvasLayoutObserver()
+    })
   }
   if (img.complete) onLoad()
   else img.addEventListener('load', onLoad)
@@ -329,10 +375,11 @@ const updateEraserPreview = (e) => {
   const canvas = canvasRef.value
   const scale = canvas.clientWidth / canvas.width
   const rCss = eraserRadius.value * scale
+  // Ring is positioned in .map-inner; offsetX/Y are relative to the canvas
   eraserPreview.value = {
     visible: true,
-    left: e.offsetX - rCss,
-    top: e.offsetY - rCss,
+    left: canvas.offsetLeft + e.offsetX - rCss,
+    top: canvas.offsetTop + e.offsetY - rCss,
     size: rCss * 2
   }
 }
@@ -491,9 +538,20 @@ const syncMapProgress = async () => {
     mapProgress.filledCells = [...filledCells.value]
   } else if (mapType.value === 'image' && canvasRef.value) {
     try {
-      mapProgress.canvasDataUrl = canvasRef.value.toDataURL('image/png')
-      const rpr = computeRoutePixelRatioFromCanvas(canvasRef.value)
+      const canvas = canvasRef.value
+      const img = containerRef.value?.querySelector('.map-image')
+      mapProgress.canvasDataUrl = canvas.toDataURL('image/png')
+      const rpr = computeRoutePixelRatioFromCanvas(canvas)
       if (rpr != null) mapProgress.route_pixel_ratio = rpr
+      if (img && img.complete) {
+        const rect = canvas.getBoundingClientRect()
+        mapProgress.route_display_metrics = {
+          image_natural: { w: img.naturalWidth, h: img.naturalHeight },
+          image_display_css: { w: Math.round(img.offsetWidth), h: Math.round(img.offsetHeight) },
+          canvas_buffer: { w: canvas.width, h: canvas.height },
+          canvas_display_css: { w: Math.round(rect.width), h: Math.round(rect.height) }
+        }
+      }
     } catch {
       return
     }
@@ -584,6 +642,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   mounted.value = false
+  teardownCanvasLayoutObserver()
   window.removeEventListener('pointerup', onWindowStrokeEnd)
   window.removeEventListener('mouseup', onWindowStrokeEnd)
   releaseCanvasPointerCaptureIfAny()
@@ -703,8 +762,7 @@ onBeforeUnmount(() => {
 
 .drawing-canvas {
   position: absolute;
-  top: 0;
-  left: 0;
+  /* top/left set in syncCanvasLayoutToImage — must match centered .map-image */
   z-index: 1;
   pointer-events: auto;
   touch-action: none;
