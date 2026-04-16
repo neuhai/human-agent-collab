@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import MapWithDrawing from './MapWithDrawing.vue'
+import { normalizeMapIdentity } from '../utils/mapIdentity.js'
 
 const props = defineProps({
   bindings: {
@@ -23,11 +24,10 @@ const map = computed(() => mapBinding.value?.value ?? null)
 
 const showToolbox = computed(() => !!mapToolboxBinding.value)
 
-/** Match MapWithDrawing getMapIdentity — do not use only map.id for :key: id is often added after first map_progress sync, which would remount the canvas and wipe the first stroke. */
+/** Match MapWithDrawing: stable across filename vs file_path / late id (see mapIdentity.js). */
 const mapStableKey = computed(() => {
-  const m = map.value
-  if (!m) return 'no-map'
-  return String(m.filename ?? m.file_path ?? m.id ?? 'no-map')
+  const id = normalizeMapIdentity(map.value)
+  return id != null ? id : 'no-map'
 })
 
 // Tooltip state

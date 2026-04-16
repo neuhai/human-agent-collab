@@ -201,7 +201,6 @@ const applyInterface = (ui) => {
   // Reset first so if a panel is removed/disabled in the latest interface, it disappears immediately.
   myStatusConfig.value = { ...DEFAULT_MY_STATUS }
   myActionsConfig.value = { ...DEFAULT_MY_ACTIONS }
-  myTasksConfig.value = { ...DEFAULT_MY_TASKS }
   socialPanelConfig.value = { ...DEFAULT_SOCIAL_PANEL }
   infoDashboardConfig.value = { ...DEFAULT_INFO_DASHBOARD }
 
@@ -213,7 +212,9 @@ const applyInterface = (ui) => {
 
   if (myStatus) myStatusConfig.value = { ...DEFAULT_MY_STATUS, ...myStatus }
   if (myActions) myActionsConfig.value = { ...DEFAULT_MY_ACTIONS, ...myActions }
-  if (myTasks) myTasksConfig.value = { ...DEFAULT_MY_TASKS, ...myTasks }
+  // My Tasks: one assignment only — resetting to DEFAULT_MY_TASKS (empty bindings) then merging
+  // could unmount MapTaskPanel mid-update when participants_updated runs after the first map stroke.
+  myTasksConfig.value = myTasks ? { ...DEFAULT_MY_TASKS, ...myTasks } : { ...DEFAULT_MY_TASKS }
   if (social) socialPanelConfig.value = { ...DEFAULT_SOCIAL_PANEL, ...social }
   if (info) infoDashboardConfig.value = { ...DEFAULT_INFO_DASHBOARD, ...info }
 
@@ -563,6 +564,16 @@ function applyTimerState(sessionLike, options = {}) {
     ) {
       timerLastRemainingSeconds.value = Math.max(0, Math.floor(timerInitialDurationSeconds.value - e))
     }
+  }
+
+  // Map task + in-session annotation: backend stores ~7d as remaining_seconds; timer_update adds
+  // timer_display_mode, but partial participants_updated (e.g. after map_progress sync) often does
+  // not — defaulting to count_down would flash a fake multi-day countdown. Keep count-up when untimed.
+  if (
+    sessionLike.maptask_untimed_timer === true ||
+    (sessionLike.maptask_untimed_timer !== false && maptaskUntimedTimer.value)
+  ) {
+    timerDisplayMode.value = 'count_up'
   }
 
   return renderTimerDisplayFromState()
