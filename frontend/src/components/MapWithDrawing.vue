@@ -153,7 +153,11 @@ const txtError = ref(null)
 
 const getMapIdentity = (mapObj) => {
   if (!mapObj) return null
-  return mapObj.id ?? mapObj.filename ?? mapObj.file_path ?? null
+  // Prefer filename/file_path over id: the server often adds `id` after the first
+  // map_progress sync, which would change identity and trigger resetDrawing(),
+  // clearing the canvas right after the first stroke (refresh "fixes" it because
+  // id is already present).
+  return mapObj.filename ?? mapObj.file_path ?? mapObj.id ?? null
 }
 
 const getDrawingPersistKey = () => {

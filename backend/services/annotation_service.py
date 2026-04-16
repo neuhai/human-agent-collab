@@ -18,7 +18,7 @@ from routes.session import commit_session
 
 # After crossing a route milestone, progress must stay stable (no decrease) for this many seconds,
 # then the next human action opens the annotation popup.
-MAPTASK_ROUTE_STABILITY_SECONDS = 10.0
+MAPTASK_ROUTE_STABILITY_SECONDS = 5.0
 
 from functions import route_pixel_ratio_from_map_filename
 
@@ -135,7 +135,7 @@ def _update_maptask_follower_route_stability(
     gt_ratio: float,
 ) -> None:
     """
-    Follower-only: advance 10s stability window toward arming pending_popup_checkpoint.
+    Follower-only: advance stability window (MAPTASK_ROUTE_STABILITY_SECONDS) toward arming pending_popup_checkpoint.
     If ratio drops below current milestone threshold or decreases vs last sample, reset window.
     """
     ann = _annotations_maptask_dict(session)
