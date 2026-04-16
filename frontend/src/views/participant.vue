@@ -451,6 +451,9 @@ const annotationWaitingForPartners = ref(false)
 /** From timer_update: initial_duration_seconds and remaining_seconds (same clock as on-screen timer). */
 const timerInitialDurationSeconds = ref(null)
 const timerLastRemainingSeconds = ref(null)
+const timerDisplayMode = ref('count_down')
+const timerLastSyncAtMs = ref(null)
+const timerTickInterval = ref(null)
 /** Backend: map task + in-session annotation → no countdown; end via dual submit. */
 const maptaskUntimedTimer = ref(false)
 const showMaptaskSubmitModal = ref(false)
@@ -491,6 +494,96 @@ function formatCountUpDisplay(totalSeconds) {
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   }
   return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+}
+
+function renderTimerDisplayFromState(referenceNow = Date.now()) {
+  const rem = timerLastRemainingSeconds.value
+  if (!Number.isFinite(rem) || rem < 0) return
+
+  const running = sessionStatus.value === 'running'
+  const syncedAt = timerLastSyncAtMs.value
+  const elapsedSinceSync =
+    running && Number.isFinite(syncedAt)
+      ? Math.max(0, Math.floor((referenceNow - syncedAt) / 1000))
+      : 0
+
+  const adjustedRemaining = Math.max(0, rem - elapsedSinceSync)
+  if (timerDisplayMode.value === 'count_up') {
+    const init = timerInitialDurationSeconds.value
+    const elapsed =
+      Number.isFinite(init) && init >= 0
+        ? Math.max(0, Math.floor(init - adjustedRemaining))
+        : elapsedSinceSync
+    timerDisplay.value = formatCountUpDisplay(elapsed)
+    return adjustedRemaining
+  }
+
+  const minutes = Math.floor(adjustedRemaining / 60)
+  const seconds = adjustedRemaining % 60
+  timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  return adjustedRemaining
+}
+
+function applyTimerState(sessionLike, options = {}) {
+  if (!sessionLike || sessionLike.remaining_seconds === undefined || sessionLike.remaining_seconds === null) {
+    return
+  }
+
+  if (sessionLike.initial_duration_seconds != null && sessionLike.initial_duration_seconds !== '') {
+    const idur = Number(sessionLike.initial_duration_seconds)
+    if (Number.isFinite(idur) && idur >= 0) {
+      timerInitialDurationSeconds.value = Math.floor(idur)
+    }
+  }
+
+  const remN = Number(sessionLike.remaining_seconds)
+  if (!Number.isFinite(remN) || remN < 0) {
+    return
+  }
+
+  timerLastRemainingSeconds.value = Math.floor(remN)
+  timerDisplayMode.value = sessionLike.timer_display_mode === 'count_up' ? 'count_up' : 'count_down'
+  timerLastSyncAtMs.value = options.syncNow === false ? timerLastSyncAtMs.value : Date.now()
+
+  if (
+    sessionLike.status === 'running' ||
+    sessionLike.status === 'paused' ||
+    sessionLike.status === 'waiting'
+  ) {
+    sessionStatus.value = sessionLike.status
+  }
+
+  if (sessionLike.elapsed_seconds != null && sessionLike.elapsed_seconds !== '') {
+    const e = Number(sessionLike.elapsed_seconds)
+    if (
+      Number.isFinite(e) &&
+      e >= 0 &&
+      Number.isFinite(timerInitialDurationSeconds.value) &&
+      timerInitialDurationSeconds.value >= 0
+    ) {
+      timerLastRemainingSeconds.value = Math.max(0, Math.floor(timerInitialDurationSeconds.value - e))
+    }
+  }
+
+  return renderTimerDisplayFromState()
+}
+
+function ensureTimerTicker() {
+  if (timerTickInterval.value) return
+  timerTickInterval.value = setInterval(() => {
+    const remaining = renderTimerDisplayFromState()
+    if (
+      remaining === 0 &&
+      timerDisplayMode.value !== 'count_up' &&
+      sessionStatus.value === 'running' &&
+      !sessionEnded.value
+    ) {
+      sessionEnded.value = true
+      sessionStatus.value = 'paused'
+      sessionStatusMessage.value = 'Paused'
+      navigateToPostAnnotationIfNeeded()
+    }
+  }, 1000)
 }
 
 // Store cleanup function reference
@@ -661,6 +754,7 @@ const participantsUpdateHandler = (data) => {
   // Update session status if provided
   if (data.session_info) {
     const sessionInfo = data.session_info
+    applyTimerState(sessionInfo, { syncNow: sessionInfo.status === 'running' })
     if (sessionInfo.status) {
       sessionStatus.value = sessionInfo.status
       // Update status message
@@ -688,6 +782,7 @@ const participantsUpdateHandler = (data) => {
   // to avoid duplicate calls
   if (data.update_type === 'status_changed' && data.session_info) {
     const sessionInfo = data.session_info
+    applyTimerState(sessionInfo, { syncNow: sessionInfo.status === 'running' })
     if (sessionInfo.status && sessionStatus.value !== sessionInfo.status) {
       sessionStatus.value = sessionInfo.status
       // Update status message
@@ -761,6 +856,7 @@ const fetchSessionConfig = async () => {
     if (response.ok) {
       const session = await response.json()
       syncMaptaskSessionFlags(session)
+      applyTimerState(session)
       const et = session.experiment_type || session.experiment_config?.id
       if (et) {
         experimentType.value = et
@@ -1825,6 +1921,7 @@ const handleInvestmentSubmit = async (data) => {
 }
 
 onMounted(async () => {
+  ensureTimerTicker()
   // 1) Session first so experiment type is correct (Map Task header role / participant_role persistence)
   await fetchSessionConfig()
   // 2) Fetch participants (applies interface)
@@ -1920,47 +2017,9 @@ onMounted(async () => {
           if (data.session_id && data.session_id !== sessionIdForWebSocket) {
             return
           }
-
-          if (data.initial_duration_seconds != null && data.initial_duration_seconds !== '') {
-            const idur = Number(data.initial_duration_seconds)
-            if (Number.isFinite(idur) && idur >= 0) {
-              timerInitialDurationSeconds.value = Math.floor(idur)
-            }
-          }
-
-          const countUp = data.timer_display_mode === 'count_up'
-
+          const totalSeconds = applyTimerState(data)
           if (data.remaining_seconds !== undefined && data.remaining_seconds !== null) {
-            const totalSeconds = data.remaining_seconds
-            const remN = Number(totalSeconds)
-            if (Number.isFinite(remN) && remN >= 0) {
-              timerLastRemainingSeconds.value = Math.floor(remN)
-            }
-
-            let elapsedForDisplay = null
-            if (data.elapsed_seconds != null && data.elapsed_seconds !== '') {
-              const e = Number(data.elapsed_seconds)
-              if (Number.isFinite(e) && e >= 0) {
-                elapsedForDisplay = Math.floor(e)
-              }
-            }
-            if (
-              elapsedForDisplay == null &&
-              timerInitialDurationSeconds.value != null &&
-              Number.isFinite(remN)
-            ) {
-              elapsedForDisplay = Math.max(0, timerInitialDurationSeconds.value - remN)
-            }
-
-            if (countUp && elapsedForDisplay != null) {
-              timerDisplay.value = formatCountUpDisplay(elapsedForDisplay)
-            } else {
-              const minutes = Math.floor(totalSeconds / 60)
-              const seconds = totalSeconds % 60
-              timerDisplay.value = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-            }
-
-            if (totalSeconds === 0 && !sessionEnded.value && !countUp) {
+            if (totalSeconds === 0 && !sessionEnded.value && timerDisplayMode.value !== 'count_up') {
               sessionEnded.value = true
               console.log('[Participant] Session ended, checking for final vote')
               // Show final vote popup if configured
@@ -2070,6 +2129,7 @@ onMounted(async () => {
         if (response.ok) {
           const session = await response.json()
           syncMaptaskSessionFlags(session)
+          applyTimerState(session)
           const et = session.experiment_type || session.experiment_config?.id
           if (et) {
             experimentType.value = et
@@ -2121,6 +2181,11 @@ onUnmounted(() => {
   if (readingTimerInterval.value) {
     clearInterval(readingTimerInterval.value)
     readingTimerInterval.value = null
+  }
+
+  if (timerTickInterval.value) {
+    clearInterval(timerTickInterval.value)
+    timerTickInterval.value = null
   }
   
   // Clean up auto start interval

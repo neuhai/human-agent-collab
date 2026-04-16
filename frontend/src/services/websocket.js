@@ -9,28 +9,33 @@ export function initWebSocket() {
     return socket
   }
 
-  // Socket.IO URL: explicit VITE_BACKEND_URL, else Vite dev -> Flask :5000, production build -> same origin (e.g. Docker nginx)
+  // Socket.IO target:
+  // - explicit VITE_BACKEND_URL if provided
+  // - Vite dev server -> Flask :5000
+  // - production build -> same origin via nginx proxy (/socket.io)
   const envUrl = import.meta.env.VITE_BACKEND_URL
+  const trimmedEnvUrl = typeof envUrl === 'string' ? envUrl.trim() : ''
   const backendUrl =
-    envUrl !== undefined && envUrl !== ''
-      ? envUrl
+    trimmedEnvUrl !== ''
+      ? trimmedEnvUrl
       : import.meta.env.DEV
         ? 'http://localhost:5000'
-        : typeof window !== 'undefined'
-          ? window.location.origin
-          : 'http://localhost:5000'
+        : null
   
   // Backend uses Flask-SocketIO with `async_mode='threading'` (see backend/app.py).
   // In that mode, WebSocket transport is not reliably supported and can trigger
   // 500s on `/socket.io/?transport=websocket`, causing clients to disconnect and
   // miss critical emits (e.g. `annotation_popup`). Force long-polling for stability.
-  socket = io(backendUrl, {
+  const socketOptions = {
+    path: '/socket.io',
     transports: ['polling'],
     upgrade: false,
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionAttempts: 10
-  })
+  }
+
+  socket = backendUrl ? io(backendUrl, socketOptions) : io(socketOptions)
 
   // Connection event handlers
   socket.on('connect', () => {
@@ -43,10 +48,17 @@ export function initWebSocket() {
 
   socket.on('connect_error', (error) => {
     console.error('WebSocket connection error:', error)
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && backendUrl?.startsWith('http://')) {
+      console.warn(
+        '[WebSocket] HTTPS page is trying to reach an explicit HTTP backend URL:',
+        backendUrl,
+        'This often breaks polling with SSL/protocol errors. Prefer same-origin proxying or an HTTPS backend URL.',
+      )
+    }
     if (typeof window !== 'undefined' && String(error?.message || '').includes('xhr poll')) {
       console.warn(
         '[WebSocket] Polling failed — nothing is accepting connections at',
-        backendUrl,
+        backendUrl || `${window.location.origin}/socket.io`,
         '(e.g. Docker frontend/backend stopped, or `vite preview` without proxy). Map chat uses HTTP log_action; real-time events need a running Socket.IO server.',
       )
     }

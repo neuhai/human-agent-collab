@@ -23,6 +23,13 @@ const map = computed(() => mapBinding.value?.value ?? null)
 
 const showToolbox = computed(() => !!mapToolboxBinding.value)
 
+/** Match MapWithDrawing getMapIdentity — do not use only map.id for :key: id is often added after first map_progress sync, which would remount the canvas and wipe the first stroke. */
+const mapStableKey = computed(() => {
+  const m = map.value
+  if (!m) return 'no-map'
+  return String(m.filename ?? m.file_path ?? m.id ?? 'no-map')
+})
+
 // Tooltip state
 const showTooltip = ref(false)
 const tooltipPosition = ref({ x: 0, y: 0 })
@@ -81,7 +88,7 @@ const onMouseLeave = () => {
       >
         {{ mapBinding.label }}:<span v-if="description" class="tooltip-icon">ⓘ</span>
       </span>
-      <MapWithDrawing :key="map?.id || 'no-map'" :map="map" :show-toolbox="showToolbox" />
+      <MapWithDrawing :key="mapStableKey" :map="map" :show-toolbox="showToolbox" />
     </div>
     <!-- Tooltip popup -->
     <div
