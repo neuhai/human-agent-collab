@@ -6,19 +6,15 @@ Triggers can happen in two ways:
 2) Forced-triggered: if no action-trigger happened, force popup in the late part of the window.
 
 Map Task (maptask): when a ground-truth route_pixel_ratio is set on session maps, checkpoints
-follow follower route coverage (20% / 45% / 70% of GT). The popup requires: (1) reach the
-milestone, (2) keep progress from decreasing for MAPTASK_ROUTE_STABILITY_SECONDS (erase resets
-the window), (3) a follow-up human action then opens the popup if progress still qualifies.
+follow follower route coverage (20% / 45% / 70% of GT). The popup opens when the next
+untriggered milestone is already met (session follower ratio) and a human action runs the
+annotation check (e.g. map log_action with ratio, or any action if ratio still qualifies).
 """
 
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 
 from routes.session import commit_session
-
-# After crossing a route milestone, progress must stay stable (no decrease) for this many seconds,
-# then the next human action opens the annotation popup.
-MAPTASK_ROUTE_STABILITY_SECONDS = 5.0
 
 from functions import route_pixel_ratio_from_map_filename
 
@@ -105,80 +101,6 @@ def _next_untriggered_route_checkpoint(session: dict) -> Optional[int]:
         if i not in triggered:
             return i
     return None
-
-
-def _event_time_from_client_optional(client_timestamp: Optional[str]) -> datetime:
-    """Prefer browser time when valid, else server UTC."""
-    if client_timestamp and isinstance(client_timestamp, str) and client_timestamp.strip():
-        s = client_timestamp.strip()
-        try:
-            if s.endswith('Z'):
-                s = s[:-1] + '+00:00'
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-        except ValueError:
-            pass
-    return datetime.now(timezone.utc)
-
-
-def _annotations_maptask_dict(session: dict) -> dict:
-    return session.setdefault('maptask_annotation', {})
-
-
-def _update_maptask_follower_route_stability(
-    session_key: str,
-    session: dict,
-    ratio: float,
-    event_time: datetime,
-    gt_ratio: float,
-) -> None:
-    """
-    Follower-only: advance stability window (MAPTASK_ROUTE_STABILITY_SECONDS) toward arming pending_popup_checkpoint.
-    If ratio drops below current milestone threshold or decreases vs last sample, reset window.
-    """
-    ann = _annotations_maptask_dict(session)
-    i = _next_untriggered_route_checkpoint(session)
-    if i is None:
-        commit_session(session_key, session)
-        return
-
-    threshold = MAPTASK_ROUTE_CHECKPOINT_FRACTIONS[i] * gt_ratio
-    last = ann.get('last_follower_ratio')
-    stable_iso = ann.get('stable_since_iso')
-
-    if ratio < threshold:
-        ann['stable_since_iso'] = None
-        ann['last_follower_ratio'] = ratio
-        commit_session(session_key, session)
-        return
-
-    if ratio is not None and last is not None and ratio < float(last):
-        ann['stable_since_iso'] = event_time.isoformat().replace('+00:00', 'Z')
-        ann['last_follower_ratio'] = ratio
-        commit_session(session_key, session)
-        return
-
-    if not stable_iso:
-        ann['stable_since_iso'] = event_time.isoformat().replace('+00:00', 'Z')
-        ann['last_follower_ratio'] = ratio
-        commit_session(session_key, session)
-        return
-
-    t0 = _parse_client_submitted_at_iso(stable_iso) or event_time
-    if (event_time - t0).total_seconds() >= MAPTASK_ROUTE_STABILITY_SECONDS:
-        ann['pending_popup_checkpoint'] = i
-        ann['stable_since_iso'] = None
-        ann['last_follower_ratio'] = ratio
-        print(
-            f'[Annotation] MapTask: armed pending popup checkpoint {i} after '
-            f'{MAPTASK_ROUTE_STABILITY_SECONDS}s stable progress (ratio={ratio:.6f})'
-        )
-    else:
-        ann['last_follower_ratio'] = ratio
-
-    commit_session(session_key, session)
 
 
 def _parse_elapsed_seconds_optional(raw: Any) -> Optional[int]:
@@ -312,9 +234,9 @@ def should_trigger_annotation(
     Determine if annotation should be triggered for this action.
     Returns (should_trigger, checkpoint_index).
 
-    Map task + ground-truth route ratio: (1) reach milestone progress, (2) keep progress from
-    decreasing for MAPTASK_ROUTE_STABILITY_SECONDS (erase resets the window), (3) then any human
-    action that still satisfies the milestone opens the popup.
+    Map task + ground-truth route ratio: next untriggered milestone threshold met
+    (maptask_follower_route_pixel_ratio vs 20/45/70% of GT); trigger on this human action
+    (no stability delay).
     """
     enabled = is_annotation_enabled(session)
     if not enabled:
@@ -343,48 +265,29 @@ def should_trigger_annotation(
     if exp_type == 'maptask' and gt_ratio is not None and gt_ratio > 0:
         ratio_action = parse_route_pixel_ratio_optional(route_pixel_ratio)
         role_lc = _participant_role_lc(session, participant_id)
+        updated_ratio = False
         if role_lc == 'follower' and ratio_action is not None:
             session['maptask_follower_route_pixel_ratio'] = ratio_action
+            updated_ratio = True
 
         eff_ratio = parse_route_pixel_ratio_optional(session.get('maptask_follower_route_pixel_ratio'))
-        event_time = _event_time_from_client_optional(client_timestamp)
-        ann = _annotations_maptask_dict(session)
-        pending = ann.get('pending_popup_checkpoint')
         i_next = _next_untriggered_route_checkpoint(session)
-
-        if pending is not None and i_next is not None and pending != i_next:
-            ann['pending_popup_checkpoint'] = None
-            pending = None
-            commit_session(session_key, session)
-
-        if pending is not None:
-            thr = MAPTASK_ROUTE_CHECKPOINT_FRACTIONS[int(pending)] * gt_ratio
-            if eff_ratio is None or eff_ratio < thr:
-                ann['pending_popup_checkpoint'] = None
+        if i_next is None:
+            if updated_ratio:
                 commit_session(session_key, session)
-                if role_lc == 'follower' and ratio_action is not None:
-                    _update_maptask_follower_route_stability(
-                        session_key, session, ratio_action, event_time, gt_ratio
-                    )
-                return False, None
-
-            ann['pending_popup_checkpoint'] = None
-            ann['stable_since_iso'] = None
-            ann['last_follower_ratio'] = None
-            commit_session(session_key, session)
-            print(
-                f'[Annotation] TRIGGER (maptask route): checkpoint {pending} for action {action_type} '
-                f'(after stable window + follow-up action, ratio={eff_ratio:.6f})'
-            )
-            return True, int(pending)
-
-        if role_lc != 'follower' or ratio_action is None:
             return False, None
 
-        _update_maptask_follower_route_stability(
-            session_key, session, ratio_action, event_time, gt_ratio
+        thr = MAPTASK_ROUTE_CHECKPOINT_FRACTIONS[i_next] * gt_ratio
+        if eff_ratio is None or eff_ratio < thr:
+            if updated_ratio:
+                commit_session(session_key, session)
+            return False, None
+
+        print(
+            f'[Annotation] TRIGGER (maptask route): checkpoint {i_next} for action {action_type} '
+            f'(ratio={eff_ratio:.6f}, threshold={thr:.6f})'
         )
-        return False, None
+        return True, int(i_next)
 
     # Timer-based checkpoints (default and maptask fallback when no GT on maps)
     progress = get_session_progress_pct(session)
@@ -440,15 +343,6 @@ def trigger_annotation(
         'checkpoint_index': checkpoint_index,
         'human_participant_ids': human_ids,
     }, room=session_id)
-
-    # Map task route milestones: reset stability arm state while checkpoint is active
-    try:
-        if (session.get('experiment_type') or '').strip().lower() == 'maptask' and get_maptask_route_pixel_ratio_gt(session):
-            ann = _annotations_maptask_dict(session)
-            ann['stable_since_iso'] = None
-            ann['pending_popup_checkpoint'] = None
-    except Exception:
-        pass
 
     # Broadcast status change
     from websocket.handlers import broadcast_participant_update
@@ -574,10 +468,6 @@ def submit_annotation(
         session['annotation_checkpoint'] = None
         session['annotation_submitted'] = []
         session['status'] = 'running'
-        if (session.get('experiment_type') or '').strip().lower() == 'maptask':
-            ann = _annotations_maptask_dict(session)
-            ann['stable_since_iso'] = None
-            ann['pending_popup_checkpoint'] = None
         commit_session(session_key, session)
 
         resume_timer(session_id)
