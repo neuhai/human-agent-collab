@@ -6,7 +6,7 @@ Triggers can happen in two ways:
 2) Forced-triggered: if no action-trigger happened, force popup in the late part of the window.
 
 Map Task (maptask): when a ground-truth route_pixel_ratio is set on session maps, checkpoints
-follow follower route coverage (25% / 50% / 75% of GT). The popup requires: (1) reach the
+follow follower route coverage (20% / 45% / 70% of GT). The popup requires: (1) reach the
 milestone, (2) keep progress from decreasing for MAPTASK_ROUTE_STABILITY_SECONDS (erase resets
 the window), (3) a follow-up human action then opens the popup if progress still qualifies.
 """
@@ -34,7 +34,7 @@ ANNOTATION_CHECKPOINT_RANGES = [
 FORCED_TRIGGER_WINDOW_RATIO = 0.05
 
 # Map task: milestone fractions of ground-truth route_pixel_ratio (checkpoint indices 0,1,2)
-MAPTASK_ROUTE_CHECKPOINT_FRACTIONS = (0.25, 0.5, 0.75)
+MAPTASK_ROUTE_CHECKPOINT_FRACTIONS = (0.2, 0.45, 0.7)
 
 
 def _session_maps_list(session: dict) -> list:
@@ -391,7 +391,7 @@ def should_trigger_annotation(
     checkpoint = get_current_checkpoint(session)
     print(f'[Annotation] Check: action={action_type}, progress={progress}%, remaining={session.get("remaining_seconds")}, duration_min={session.get("duration_minutes")}, checkpoint={checkpoint}')
     if checkpoint is None:
-        print(f'[Annotation] Skip: progress {progress}% not in any checkpoint range (15-30, 40-55, 65-80)')
+        print(f'[Annotation] Skip: progress {progress}% not in any checkpoint range (20-25, 45-50, 70-75)')
         return False, None
 
     triggered = session.get('annotation_triggered_checkpoints', [])
