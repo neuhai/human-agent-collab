@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
@@ -124,6 +124,10 @@ const otherLabelText = ref('')
 const explanationTranscript = ref('')
 /** Matches AnnotationPopup: after a successful recording, show re-record affordance */
 const hasRecordedExplanation = ref(false)
+/** MM:SS label for "You imported your action at …" after picking a prior moment */
+const explanationImportTimeLabel = ref('')
+const importDropdownOpen = ref(false)
+const importDropdownRoot = ref(null)
 /** After Confirm on an answer step: big checkmark before flip to next */
 const showStepSuccess = ref(false)
 const q4Value = ref(null)
@@ -477,6 +481,56 @@ const prevMomentSaved = computed(() => {
   return annotations.value[prevMoment.action_id] || null
 })
 
+/** First N whitespace-separated words, then ellipsis (post-annotation import preview). */
+function truncateWords(text, maxWords) {
+  const s = String(text || '').trim()
+  if (!s) return '—'
+  const words = s.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '—'
+  if (words.length <= maxWords) return words.join(' ')
+  return `${words.slice(0, maxWords).join(' ')}…`
+}
+
+/** Prior moments (before current) that already have a saved moment explanation — for import dropdown. */
+const previousExplanationImportOptions = computed(() => {
+  const moments = annotationMoments.value
+  const idx = currentMomentIndex.value
+  const out = []
+  for (let i = 0; i < idx; i++) {
+    const mom = moments[i]
+    if (!mom?.action_id) continue
+    const saved = migrateMomentAnnotation(annotations.value[mom.action_id] || {})
+    const ex = String(saved[MOMENT_EXPLAIN_KEY] || '').trim()
+    if (!ex) continue
+    const entry =
+      displayMergedLogs.value.find((e) => e.action_id === mom.action_id) ||
+      visibleMergedLogs.value.find((e) => e.action_id === mom.action_id) ||
+      mom
+    out.push({
+      action_id: mom.action_id,
+      timeLabel: formatLogEntryTime(entry),
+      actionContent: String(entry?.action_content || '—').trim() || '—',
+      explanationPreview: truncateWords(ex, 5),
+      fullExplanation: ex,
+    })
+  }
+  return out
+})
+
+function selectImportFromPrevious(option) {
+  if (!option?.fullExplanation) return
+  explanationTranscript.value = option.fullExplanation
+  hasRecordedExplanation.value = true
+  explanationImportTimeLabel.value = option.timeLabel
+  importDropdownOpen.value = false
+}
+
+function closeImportDropdownOnOutsideClick(e) {
+  if (!importDropdownOpen.value) return
+  const el = importDropdownRoot.value
+  if (el && !el.contains(e.target)) importDropdownOpen.value = false
+}
+
 const prevAnswerForStep = computed(() => {
   const prev = prevMomentSaved.value
   const sec = currentSection.value
@@ -602,6 +656,8 @@ function syncPhaseFromSavedMoment() {
 function loadCurrentMomentState() {
   const m = currentMoment.value
   if (!m) return
+  explanationImportTimeLabel.value = ''
+  importDropdownOpen.value = false
   if (!annotations.value[m.action_id]) {
     annotations.value[m.action_id] = {}
   }
@@ -696,6 +752,7 @@ async function confirmExplanationPhase() {
   saveMomentExplanationOnly()
   const ok = await saveAnnotationsToFile()
   if (!ok) return
+  explanationImportTimeLabel.value = ''
   annotationPhase.value = 'answer'
   stepIndex.value = 0
   loadStepStateFromSaved()
@@ -711,9 +768,9 @@ async function confirmCurrentStep() {
   const ok = await saveAnnotationsToFile()
   if (!ok) return
   showStepSuccess.value = true
-  await delay(750)
+  await delay(380)
   showStepSuccess.value = false
-  await delay(80)
+  await delay(35)
   moveToNextStepOrMoment()
 }
 
@@ -938,6 +995,7 @@ async function toggleRecording(target) {
   if (target === 'moment_explain' && hasRecordedExplanation.value && !isRecording.value) {
     explanationTranscript.value = ''
     hasRecordedExplanation.value = false
+    explanationImportTimeLabel.value = ''
   }
   if (isRecording.value) {
     if (mediaRecorder.value && mediaRecorder.value.state !== 'inactive') {
@@ -972,12 +1030,14 @@ async function toggleRecording(target) {
         } else if (target === 'moment_explain') {
           explanationTranscript.value = text
           hasRecordedExplanation.value = true
+          explanationImportTimeLabel.value = ''
         }
       } catch (err) {
         console.error('[PostAnnotation] Transcribe error:', err)
         if (target === 'moment_explain') {
           explanationTranscript.value = '[Transcription failed. Please try again.]'
           hasRecordedExplanation.value = true
+          explanationImportTimeLabel.value = ''
         }
       } finally {
         isTranscribing.value = false
@@ -1026,7 +1086,12 @@ watch(currentMomentIndex, () => {
 onMounted(() => {
   if (route.query.session_id) sessionId.value = route.query.session_id
   if (route.query.participant_id) participantId.value = route.query.participant_id
+  document.addEventListener('click', closeImportDropdownOnOutsideClick)
   loadData()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeImportDropdownOnOutsideClick)
 })
 </script>
 
@@ -1187,6 +1252,48 @@ onMounted(() => {
               </div>
               <p class="record-phase-instruction">{{ RECORD_PHASE_INSTRUCTION }}</p>
 
+              <div
+                v-if="previousExplanationImportOptions.length"
+                ref="importDropdownRoot"
+                class="import-prev-wrap"
+              >
+                <button
+                  type="button"
+                  class="btn-import-prev"
+                  @click.stop="importDropdownOpen = !importDropdownOpen"
+                >
+                  Import previous explanation
+                  <i
+                    class="fa-solid fa-chevron-down import-prev-chevron"
+                    :class="{ 'import-prev-chevron--open': importDropdownOpen }"
+                    aria-hidden="true"
+                  ></i>
+                </button>
+                <div
+                  v-show="importDropdownOpen"
+                  class="import-prev-dropdown"
+                  role="listbox"
+                  @click.stop
+                >
+                  <button
+                    v-for="opt in previousExplanationImportOptions"
+                    :key="opt.action_id"
+                    type="button"
+                    class="import-prev-row"
+                    role="option"
+                    @click="selectImportFromPrevious(opt)"
+                  >
+                    <span class="import-prev-col import-prev-time">{{ opt.timeLabel }}</span>
+                    <span class="import-prev-col import-prev-action" :title="opt.actionContent">{{
+                      opt.actionContent
+                    }}</span>
+                    <span class="import-prev-col import-prev-explain" :title="opt.fullExplanation">{{
+                      opt.explanationPreview
+                    }}</span>
+                  </button>
+                </div>
+              </div>
+
               <div class="moment-explain-recording">
                 <button
                   type="button"
@@ -1222,7 +1329,10 @@ onMounted(() => {
                   v-if="hasRecordedExplanation && !(isTranscribing && recordingTarget === 'moment_explain')"
                   class="moment-explain-transcription"
                 >
-                  <label class="moment-explain-label">Your response (editable)</label>
+                  <p v-if="explanationImportTimeLabel" class="moment-explain-import-notice">
+                    You imported your action at {{ explanationImportTimeLabel }}
+                  </p>
+                  <label class="moment-explain-label">Your response (please review and fix typos)</label>
                   <textarea
                     v-model="explanationTranscript"
                     class="transcription-input"
@@ -2164,6 +2274,117 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+.import-prev-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto 16px;
+  z-index: 5;
+}
+
+.btn-import-prev {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4338ca;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.btn-import-prev:hover {
+  background: #e0e7ff;
+  border-color: #a5b4fc;
+}
+
+.import-prev-chevron {
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+.import-prev-chevron--open {
+  transform: rotate(180deg);
+}
+
+.import-prev-dropdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  max-height: 240px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  padding: 6px;
+}
+
+.import-prev-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 8px;
+  align-items: start;
+  width: 100%;
+  padding: 10px 8px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  color: #1f2937;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.import-prev-row:hover {
+  background: #f3f4f6;
+}
+
+.import-prev-col {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.import-prev-time {
+  font-weight: 600;
+  color: #4f46e5;
+  white-space: nowrap;
+}
+
+.import-prev-action {
+  color: #374151;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.import-prev-explain {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.import-prev-notice {
+  margin: 0 0 8px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4338ca;
+  text-align: left;
+}
+
 .all-questions-overview {
   text-align: left;
   margin-bottom: 16px;
@@ -2341,14 +2562,14 @@ onMounted(() => {
   justify-content: center;
   background: rgba(255, 255, 255, 0.94);
   border-radius: 10px;
-  animation: success-fade-in 0.2s ease;
+  animation: success-fade-in 0.12s ease;
 }
 
 .step-success-check {
   font-size: 96px;
   line-height: 1;
   color: #16a34a;
-  animation: success-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: success-pop 0.26s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 @keyframes success-fade-in {
@@ -2391,8 +2612,8 @@ onMounted(() => {
 .answer-card-flip-enter-active,
 .answer-card-flip-leave-active {
   transition:
-    transform 0.45s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.3s ease;
+    transform 0.26s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.18s ease;
 }
 
 .answer-card-flip-enter-from {

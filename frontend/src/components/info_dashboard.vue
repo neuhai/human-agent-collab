@@ -17,11 +17,28 @@ const props = defineProps({
     participants: {
         type: Array,
         default: () => []
+    },
+    /** When `maptask`, map progress preview fills the info panel height (two-person experiments). */
+    experimentType: {
+        type: String,
+        default: ''
     }
 })
 
 const isVisible = computed(() => {
     return props.config.visible_if === 'true' || props.config.visible_if === true
+})
+
+const hasMapProgressBinding = computed(() => {
+    return (props.config.bindings || []).some((b) =>
+        b.control === 'map_preview' ||
+        (b.path && String(b.path).includes('map_progress')) ||
+        (b.label || '').toLowerCase() === 'map progress'
+    )
+})
+
+const mapTaskFullHeightPreview = computed(() => {
+    return props.experimentType === 'maptask' && isVisible.value && hasMapProgressBinding.value
 })
 
 // Get my participant ID
@@ -79,25 +96,52 @@ const participantConfigs = computed(() => {
 </script>
 
 <template>
-    <Panel v-if="isVisible" :header="config.label || 'Info Dashboard'" :description="config.description || ''">
+    <Panel
+        v-if="isVisible"
+        class="info-dashboard-panel"
+        :class="{ 'info-dashboard-panel--maptask': mapTaskFullHeightPreview }"
+        :header="config.label || 'Info Dashboard'"
+        :description="config.description || ''"
+    >
         <div v-if="participantConfigs.length === 0" class="empty-message">
             No other participants in this session
         </div>
-        <div v-else class="participants-list">
-            <BaseParticipantStatusComponent 
-                v-for="(participantConfig, index) in participantConfigs" 
+        <div
+            v-else
+            class="participants-list"
+            :class="{ 'participants-list--maptask-fill': mapTaskFullHeightPreview }"
+        >
+            <BaseParticipantStatusComponent
+                v-for="(participantConfig, index) in participantConfigs"
                 :key="participantConfig.participant?.id || index"
-                :config="participantConfig" 
+                :config="participantConfig"
+                :map-task-full-height-preview="mapTaskFullHeightPreview"
             />
         </div>
     </Panel>
 </template>
 
 <style scoped>
+:deep(.info-dashboard-panel--maptask.panel-container) {
+    flex: 1;
+    min-height: 0;
+}
+
+:deep(.info-dashboard-panel--maptask .panel-body) {
+    flex: 1;
+    min-height: 0;
+}
+
 .participants-list {
     display: flex;
     flex-direction: column;
     gap: 12px;
+}
+
+.participants-list--maptask-fill {
+    flex: 1;
+    min-height: 0;
+    gap: 0;
 }
 
 .empty-message {
@@ -106,7 +150,4 @@ const participantConfigs = computed(() => {
     color: #6b7280;
     font-size: 14px;
 }
-</style>
-
-<style scoped>
 </style>

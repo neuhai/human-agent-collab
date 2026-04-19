@@ -5,6 +5,11 @@ const props = defineProps({
   mapProgress: {
     type: Object,
     default: null
+  },
+  /** Info Dashboard (map task): expand preview to available column height, image centered with object-fit contain. */
+  fillHeight: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -70,21 +75,27 @@ watch(() => props.mapProgress?.map, () => {
 
 <template>
   <div v-if="!mapProgress" class="map-progress-empty">No map progress yet</div>
-  <div v-else class="map-progress-display">
+  <div v-else class="map-progress-display" :class="{ 'map-progress-display--fill': fillHeight }">
     <!-- Image: show map with canvas overlay -->
-    <div v-if="mapType === 'image'" class="map-progress-image">
-      <div class="image-wrapper">
-        <img :src="mapUrl" :alt="map?.original_filename || 'Map'" class="map-image" />
+    <div v-if="mapType === 'image'" class="map-progress-image" :class="{ 'map-progress-image--fill': fillHeight }">
+      <div class="image-wrapper" :class="{ 'image-wrapper--fill': fillHeight }">
+        <img
+          :src="mapUrl"
+          :alt="map?.original_filename || 'Map'"
+          class="map-image"
+          :class="{ 'map-image--fill': fillHeight }"
+        />
         <img
           v-if="canvasDataUrl"
           :src="canvasDataUrl"
           class="drawing-overlay"
+          :class="{ 'drawing-overlay--fill': fillHeight }"
           alt="Route"
         />
       </div>
     </div>
     <!-- TXT: show grid with filled cells -->
-    <div v-else-if="mapType === 'txt'" class="map-progress-txt">
+    <div v-else-if="mapType === 'txt'" class="map-progress-txt" :class="{ 'map-progress-txt--fill': fillHeight }">
       <div v-if="txtLoading" class="map-loading">Loading...</div>
       <div v-else class="txt-grid">
         <div v-for="(line, row) in txtLines" :key="row" class="txt-row">
@@ -113,13 +124,39 @@ watch(() => props.mapProgress?.map, () => {
   max-width: 200px;
 }
 
+.map-progress-display--fill {
+  flex: 1;
+  min-height: 0;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
 .map-progress-image {
   position: relative;
+}
+
+.map-progress-image--fill {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .image-wrapper {
   position: relative;
   width: 100%;
+}
+
+.image-wrapper--fill {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .map-image {
@@ -128,6 +165,14 @@ watch(() => props.mapProgress?.map, () => {
   display: block;
   border-radius: 6px;
   border: 1px solid #e5e7eb;
+}
+
+.map-image--fill {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
 .drawing-overlay {
@@ -139,10 +184,23 @@ watch(() => props.mapProgress?.map, () => {
   pointer-events: none;
 }
 
+.drawing-overlay--fill {
+  object-fit: contain;
+}
+
 .map-progress-txt {
   font-family: monospace;
   font-size: 8px;
   line-height: 1;
+}
+
+.map-progress-txt--fill {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .txt-grid {

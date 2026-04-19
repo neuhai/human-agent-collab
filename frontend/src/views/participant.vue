@@ -2323,7 +2323,11 @@ onUnmounted(() => {
         v-if="infoDashboardConfig.visible_if === true || infoDashboardConfig.visible_if === 'true'"
         class="info_panel"
       >
-        <InfoDashboard :config="infoDashboardConfig" :participants="allParticipants" />
+        <InfoDashboard
+          :config="infoDashboardConfig"
+          :participants="allParticipants"
+          :experiment-type="experimentType"
+        />
       </div>
     </div>
   </main>
@@ -2491,6 +2495,7 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   height: calc(100vh - 90px);
+  min-height: 0;
 }
 
 .header-left, .header-center{

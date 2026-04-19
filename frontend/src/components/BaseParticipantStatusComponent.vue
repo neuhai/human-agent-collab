@@ -11,6 +11,11 @@ const props = defineProps({
             visible_if: 'true',
             bindings: []
         })
+    },
+    /** Map task + Info Dashboard: follower map preview fills panel height below labels. */
+    mapTaskFullHeightPreview: {
+        type: Boolean,
+        default: false
     }
 })
 
@@ -155,7 +160,11 @@ const sortedRankings = computed(() => {
 </script>
 
 <template>
-    <div v-if="isVisible" class="component-module">
+    <div
+        v-if="isVisible"
+        class="component-module"
+        :class="{ 'component-module--maptask-full-preview': mapTaskFullHeightPreview && mapProgressBinding }"
+    >
         <!-- 第一行：名字在左边，specialty shape 在右边 -->
         <div v-if="nameBinding || specialtyShapeBinding" class="row first-row">
             <div v-if="nameBinding" class="name-section">
@@ -217,19 +226,27 @@ const sortedRankings = computed(() => {
         </div>
 
         <!-- Map Progress: follower's drawing for map task (guide awareness) -->
-        <div v-if="mapProgressBinding" class="row map-progress-row">
+        <div
+            v-if="mapProgressBinding"
+            class="row map-progress-row"
+            :class="{ 'map-progress-row--fill': mapTaskFullHeightPreview }"
+        >
             <div class="map-progress-section">
                 <span class="field-label">{{ mapProgressBinding.label }}:</span>
-                <div class="control-map-preview">
+                <div
+                    class="control-map-preview"
+                    :class="{ 'control-map-preview--fill': mapTaskFullHeightPreview }"
+                >
                     <MapProgressDisplay
                         v-if="mapProgressBinding.value && typeof mapProgressBinding.value === 'object'"
                         :map-progress="mapProgressBinding.value"
+                        :fill-height="mapTaskFullHeightPreview"
                     />
                     <img
                         v-else-if="mapProgressBinding.value && typeof mapProgressBinding.value === 'string'"
                         :src="mapProgressBinding.value"
                         alt="Map progress preview"
-                        class="map-preview-img"
+                        :class="['map-preview-img', { 'map-preview-img--fill': mapTaskFullHeightPreview }]"
                     />
                     <span v-else class="map-progress-empty">No drawing yet</span>
                 </div>
@@ -293,6 +310,14 @@ const sortedRankings = computed(() => {
     margin-bottom: 8px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     transition: box-shadow 0.3s ease;
+}
+
+.component-module--maptask-full-preview {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
 }
 
 .component-module:hover {
@@ -587,6 +612,12 @@ const sortedRankings = computed(() => {
     width: 100%;
 }
 
+.map-progress-row--fill {
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 0;
+}
+
 .map-progress-section {
     width: 100%;
     display: flex;
@@ -594,9 +625,23 @@ const sortedRankings = computed(() => {
     gap: 8px;
 }
 
+.component-module--maptask-full-preview .map-progress-section {
+    flex: 1;
+    min-height: 0;
+}
+
 .control-map-preview {
     width: 100%;
     max-width: 200px;
+}
+
+.control-map-preview--fill {
+    flex: 1;
+    min-height: 0;
+    max-width: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .map-preview-img {
@@ -604,6 +649,14 @@ const sortedRankings = computed(() => {
     height: auto;
     border-radius: 6px;
     border: 1px solid #e5e7eb;
+}
+
+.map-preview-img--fill {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
 }
 
 .map-progress-empty {
