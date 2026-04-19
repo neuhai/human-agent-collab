@@ -169,7 +169,7 @@ function isMaptaskPostAnnotationLogEntry(entry) {
   const c = String(entry?.action_content || '').trim()
   // Humans: WebSocket logs send_message. AI agents: agent_context_protocol logs type "message".
   if (t === 'send_message' || t === 'message') return true
-  if (t === 'map_tool_click' && ['brush', 'eraser', 'undo', 'reset'].includes(c)) return true
+  if (t === 'map_tool_click' && ['undo', 'reset'].includes(c)) return true
   if (t === 'map_draw_stop' && (c === 'brush_release' || c === 'eraser_release')) return true
   return false
 }
@@ -262,9 +262,7 @@ function syncCarouselToCurrentMoment() {
 const ACTION_TAG_LABELS = {
   message: 'Send message',
   brush_release: 'Draw route',
-  brush: 'Brush tool',
   eraser_release: 'Erase route',
-  eraser: 'Erase route',
   undo: 'Undo last action',
   reset: 'Reset map',
 }
@@ -281,10 +279,8 @@ function getActionTagKey(entry) {
   const c = String(entry?.action_content || '').trim()
   if (t === 'send_message' || t === 'message') return 'message'
   if (t === 'map_draw_stop' && c === 'brush_release') return 'brush_release'
-  if (t === 'map_draw_stop' && c === 'eraser_release') return 'eraser'
+  if (t === 'map_draw_stop' && c === 'eraser_release') return 'eraser_release'
   if (t === 'map_tool_click') {
-    if (c === 'brush') return 'brush'
-    if (c === 'eraser') return 'eraser'
     if (c === 'undo') return 'undo'
     if (c === 'reset') return 'reset'
   }
@@ -1873,13 +1869,7 @@ onUnmounted(() => {
   border: 1px solid #a7f3d0;
 }
 
-.tag-brush {
-  background: #ecfdf5;
-  color: #047857;
-  border: 1px solid #6ee7b7;
-}
-
-.tag-eraser {
+.tag-eraser_release {
   background: #ffedd5;
   color: #9a3412;
   border: 1px solid #fed7aa;

@@ -3,6 +3,7 @@ import { ref, computed, watch, inject, onMounted, onUnmounted, nextTick } from '
 import BaseParticipantStatusComponent from './BaseParticipantStatusComponent.vue'
 import MturkPanel from './MturkPanel.vue'
 import { onParticipantsUpdate, offParticipantsUpdate } from '../services/websocket.js'
+import { apiUrl } from '../utils/api.js'
 import mapPreviewImg from '../assets/map_preview.png'
 
 // Inject experiments and update function from researcher.vue
@@ -1799,10 +1800,13 @@ const handleMapsUpload = async (event) => {
     })
 
     const encodedSessionName = encodeURIComponent(currentSessionName.value)
-    const response = await fetch(`/api/sessions/${encodedSessionName}/upload_maps`, {
-      method: 'POST',
-      body: formData
-    })
+    const response = await fetch(
+      apiUrl(`/api/sessions/${encodedSessionName}/upload_maps`),
+      {
+        method: 'POST',
+        body: formData
+      }
+    )
 
     if (!response.ok) {
       const error = await response.json()
@@ -1824,7 +1828,13 @@ const handleMapsUpload = async (event) => {
     }
   } catch (error) {
     console.error('Error uploading maps:', error)
-    alert(`Error uploading maps: ${error.message}`)
+    const isNetwork =
+      error instanceof TypeError &&
+      (error.message === 'Failed to fetch' || error.message === 'Load failed')
+    const hint = isNetwork
+      ? ' Check that the backend is running and /api is reachable (Vite proxy, nginx, or VITE_BACKEND_URL). Extensions that intercept fetch can cause this — try a private window.'
+      : ''
+    alert(`Error uploading maps: ${error.message}.${hint}`)
   }
 }
 

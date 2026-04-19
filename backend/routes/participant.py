@@ -1925,8 +1925,21 @@ def get_post_annotation_data(session_identifier):
         except Exception as ex:
             print(f'[PostAnnotation] S3 resolve: {ex}')
 
-        # Annotation moments: current participant's actions that have screenshots (from filtered, after S3 presign)
-        annotation_moments = [e for e in filtered_entries if e.get('participant_id') == participant_id and e.get('screenshot')]
+        # Annotation moments: current participant's actions that have screenshots (from filtered, after S3 presign).
+        # Exclude brush/eraser tool picks — only brush_release / eraser_release (map_draw_stop) are annotatable map actions.
+        def _post_annotation_moment_ok(entry):
+            if entry.get('action_type') != 'map_tool_click':
+                return True
+            c = (entry.get('action_content') or '').strip()
+            return c not in ('brush', 'eraser')
+
+        annotation_moments = [
+            e
+            for e in filtered_entries
+            if e.get('participant_id') == participant_id
+            and e.get('screenshot')
+            and _post_annotation_moment_ok(e)
+        ]
 
         # Base URL for log files (local files/ paths); s3:// assets are expanded to presigned HTTPS above
         files_base = f'/api/sessions/{session_id}/log_files'
