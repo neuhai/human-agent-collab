@@ -3,9 +3,18 @@ import { io } from 'socket.io-client'
 // WebSocket connection instance
 let socket = null
 
+/**
+ * After reconnect, Flask-SocketIO gives the client a new sid; the server-side room
+ * membership is cleared on disconnect. Re-emit join_session on every `connect` when
+ * we had previously joined, so `message_received` / `typing_indicator` keep working
+ * without a full page refresh.
+ * Cleared in leaveSession / disconnectWebSocket.
+ */
+let sessionRoomBinding = null
+
 // Initialize WebSocket connection
 export function initWebSocket() {
-  if (socket && socket.connected) {
+  if (socket) {
     return socket
   }
 
@@ -40,6 +49,16 @@ export function initWebSocket() {
   // Connection event handlers
   socket.on('connect', () => {
     console.log('WebSocket connected:', socket.id)
+    if (sessionRoomBinding) {
+      socket.emit('join_session', {
+        session_id: sessionRoomBinding.sessionId,
+        role: sessionRoomBinding.role,
+      })
+      console.log(
+        '[WebSocket] Re-joined session after connect (reconnect or new connection):',
+        sessionRoomBinding.sessionId,
+      )
+    }
   })
 
   socket.on('disconnect', () => {
@@ -76,7 +95,7 @@ export function initWebSocket() {
 
 // Get current socket instance
 export function getSocket() {
-  if (!socket || !socket.connected) {
+  if (!socket) {
     return initWebSocket()
   }
   return socket
@@ -94,6 +113,7 @@ export function joinSession(sessionId, role = 'researcher') {
       ws.off('joined_session', onJoined)
       ws.off('error', onError)
       const actualSessionId = data?.session_id || sessionId
+      sessionRoomBinding = { sessionId: actualSessionId, role }
       console.log(`[WebSocket] Successfully joined session: ${actualSessionId} as ${role} (requested: ${sessionId})`)
       resolve({ ...data, session_id: actualSessionId, requested_session_id: sessionId })
     }
@@ -126,6 +146,7 @@ export function joinSession(sessionId, role = 'researcher') {
 
 // Leave a session room
 export function leaveSession(sessionId) {
+  sessionRoomBinding = null
   if (socket && socket.connected) {
     socket.emit('leave_session', {
       session_id: sessionId
@@ -136,6 +157,7 @@ export function leaveSession(sessionId) {
 
 // Disconnect WebSocket
 export function disconnectWebSocket() {
+  sessionRoomBinding = null
   if (socket) {
     socket.disconnect()
     socket = null
@@ -189,7 +211,7 @@ export function onParticipantsUpdate(callback) {
 
 // Remove participant update listener
 export function offParticipantsUpdate(callback) {
-  if (socket && socket.connected) {
+  if (socket) {
     const storedWrapper = participantsUpdateCallbacks.get(callback)
     if (storedWrapper) {
       socket.off('participants_updated', storedWrapper)
@@ -322,7 +344,7 @@ export function onMessageReceived(callback) {
 
 // Remove message received listener
 export function offMessageReceived(callback) {
-  if (socket && socket.connected) {
+  if (socket) {
     const storedWrapper = messageReceivedCallbacks.get(callback)
     if (storedWrapper) {
       socket.off('message_received', storedWrapper)
@@ -367,7 +389,7 @@ export function onTypingIndicator(callback) {
 }
 
 export function offTypingIndicator(callback) {
-  if (!socket?.connected) return
+  if (!socket) return
   const w = typingIndicatorCallbacks.get(callback)
   if (w) {
     socket.off('typing_indicator', w)
