@@ -914,13 +914,6 @@ function firstIncompleteStepIndexForSaved(rawSaved) {
   return SECTIONS.length - 1
 }
 
-/** Revisiting a fully annotated moment: start at explanation (step 0), not the last question (Alignment). */
-function stepIndexForSelectedMomentAction(rawSaved) {
-  const saved = migrateMomentAnnotation(rawSaved || {})
-  if (isMomentAnnotationComplete(saved)) return 0
-  return firstIncompleteStepIndexForSaved(saved)
-}
-
 function isLogEntryFullyAnnotated(entry) {
   const idx = getMomentIndexForLogEntry(entry)
   if (idx < 0) return false
@@ -968,8 +961,8 @@ async function onInteractionLogEntryClick(entry) {
 
   if (ownMi >= 0) {
     currentMomentIndex.value = ownMi
-    const aid = annotationMoments.value[ownMi]?.action_id
-    stepIndex.value = stepIndexForSelectedMomentAction(annotations.value[aid] || {})
+    // Same moment as before: currentMoment watch does not run; must re-sync phase (e.g. completed → explanation).
+    loadCurrentMomentState()
   }
 
   if (navIdx >= 0) {
@@ -992,7 +985,7 @@ async function screenshotNavDelta(delta) {
   const mi = getMomentIndexForLogEntry(entry)
   if (mi >= 0) {
     currentMomentIndex.value = mi
-    stepIndex.value = stepIndexForSelectedMomentAction(annotations.value[entry.action_id] || {})
+    loadCurrentMomentState()
   }
 }
 
