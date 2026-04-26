@@ -643,6 +643,9 @@ function syncPhaseFromSavedMoment() {
   if (!ex) {
     annotationPhase.value = 'record'
     stepIndex.value = 0
+  } else if (isMomentAnnotationComplete(saved)) {
+    annotationPhase.value = 'record'
+    stepIndex.value = 0
   } else {
     annotationPhase.value = 'answer'
     stepIndex.value = firstIncompleteStepIndexForSaved(saved)
@@ -911,6 +914,13 @@ function firstIncompleteStepIndexForSaved(rawSaved) {
   return SECTIONS.length - 1
 }
 
+/** Revisiting a fully annotated moment: start at explanation (step 0), not the last question (Alignment). */
+function stepIndexForSelectedMomentAction(rawSaved) {
+  const saved = migrateMomentAnnotation(rawSaved || {})
+  if (isMomentAnnotationComplete(saved)) return 0
+  return firstIncompleteStepIndexForSaved(saved)
+}
+
 function isLogEntryFullyAnnotated(entry) {
   const idx = getMomentIndexForLogEntry(entry)
   if (idx < 0) return false
@@ -959,7 +969,7 @@ async function onInteractionLogEntryClick(entry) {
   if (ownMi >= 0) {
     currentMomentIndex.value = ownMi
     const aid = annotationMoments.value[ownMi]?.action_id
-    stepIndex.value = firstIncompleteStepIndexForSaved(annotations.value[aid] || {})
+    stepIndex.value = stepIndexForSelectedMomentAction(annotations.value[aid] || {})
   }
 
   if (navIdx >= 0) {
@@ -982,7 +992,7 @@ async function screenshotNavDelta(delta) {
   const mi = getMomentIndexForLogEntry(entry)
   if (mi >= 0) {
     currentMomentIndex.value = mi
-    stepIndex.value = firstIncompleteStepIndexForSaved(annotations.value[entry.action_id] || {})
+    stepIndex.value = stepIndexForSelectedMomentAction(annotations.value[entry.action_id] || {})
   }
 }
 
