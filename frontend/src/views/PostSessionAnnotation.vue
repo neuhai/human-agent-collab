@@ -188,14 +188,18 @@ const displayMergedLogs = computed(() => {
 const momentIndexByActionId = computed(() => {
   const map = new Map()
   annotationMoments.value.forEach((mom, i) => {
-    if (mom?.action_id) map.set(mom.action_id, i)
+    if (mom?.action_id == null || mom.action_id === '') return
+    map.set(mom.action_id, i)
+    const c = canonicalActionKey(mom.action_id)
+    if (c) map.set(c, i)
   })
   return map
 })
 
 function getMomentIndexForLogEntry(entry) {
   if (!entry?.action_id) return -1
-  return momentIndexByActionId.value.get(entry.action_id) ?? -1
+  const map = momentIndexByActionId.value
+  return map.get(entry.action_id) ?? map.get(canonicalActionKey(entry.action_id)) ?? -1
 }
 
 /** Merge legacy per-question transcripts into momentExplanationTranscript when loading old saves */
@@ -212,6 +216,34 @@ function migrateMomentAnnotation(saved) {
   }
   if (parts.length) out[MOMENT_EXPLAIN_KEY] = parts.join('\n\n')
   return out
+}
+
+function canonicalActionKey(aid) {
+  if (aid == null || aid === '') return ''
+  return String(aid).trim()
+}
+
+/**
+ * API / JSON may use slightly different string keys; align with the log ✓ and sync phase
+ * (otherwise a "complete" save may be read under a mismatched key and you stay on q4).
+ */
+function getAnnotationForActionId(aid) {
+  const c = canonicalActionKey(aid)
+  if (!c) return {}
+  const tryKeys = [aid, c]
+  for (const k of tryKeys) {
+    if (k === '' || k == null) continue
+    const v = annotations.value[k]
+    if (v && typeof v === 'object' && !Array.isArray(v)) return { ...v }
+  }
+  const lower = c.toLowerCase()
+  for (const k of Object.keys(annotations.value)) {
+    if (String(k).trim().toLowerCase() === lower) {
+      const v = annotations.value[k]
+      if (v && typeof v === 'object' && !Array.isArray(v)) return { ...v }
+    }
+  }
+  return {}
 }
 
 function logEntryParticipantIsYou(entry) {
@@ -247,14 +279,17 @@ const screenshotDisplayEntry = computed(() => {
 const showAnnotationPanel = computed(() => {
   const e = screenshotDisplayEntry.value
   const cm = currentMoment.value
-  return !!(e && cm && e.action_id === cm.action_id && getMomentIndexForLogEntry(e) >= 0)
+  if (!e || !cm) return false
+  if (getMomentIndexForLogEntry(e) < 0) return false
+  return canonicalActionKey(e.action_id) === canonicalActionKey(cm.action_id)
 })
 
 function syncCarouselToCurrentMoment() {
   const cm = currentMoment.value
   if (!cm?.action_id) return
   const list = screenshotNavEntries.value
-  const i = list.findIndex((e) => e.action_id === cm.action_id)
+  const ca = canonicalActionKey(cm.action_id)
+  const i = list.findIndex((e) => canonicalActionKey(e.action_id) === ca)
   if (i >= 0) screenshotCarouselIndex.value = i
 }
 
@@ -474,7 +509,8 @@ const prevMomentSaved = computed(() => {
   if (currentMomentIndex.value <= 0) return null
   const prevMoment = annotationMoments.value[currentMomentIndex.value - 1]
   if (!prevMoment) return null
-  return annotations.value[prevMoment.action_id] || null
+  const r = getAnnotationForActionId(prevMoment.action_id)
+  return Object.keys(r).length ? r : null
 })
 
 /** First N whitespace-separated words, then ellipsis (post-annotation import preview). */
@@ -495,7 +531,7 @@ const previousExplanationImportOptions = computed(() => {
   for (let i = 0; i < idx; i++) {
     const mom = moments[i]
     if (!mom?.action_id) continue
-    const saved = migrateMomentAnnotation(annotations.value[mom.action_id] || {})
+    const saved = migrateMomentAnnotation(getAnnotationForActionId(mom.action_id))
     const ex = String(saved[MOMENT_EXPLAIN_KEY] || '').trim()
     if (!ex) continue
     const entry =
@@ -613,7 +649,7 @@ function loadStepStateFromSaved() {
   const m = currentMoment.value
   const sec = currentSection.value
   if (!m || !sec) return
-  const saved = migrateMomentAnnotation(annotations.value[m.action_id] || {})
+  const saved = migrateMomentAnnotation(getAnnotationForActionId(m.action_id))
   if (sec.kind === 'yes_no_reasons') {
     q4Value.value = saved.q4 === 'yes' || saved.q4 === 'no' ? saved.q4 : null
     q4Reasons.value = Array.isArray(saved.q4Reasons) ? [...saved.q4Reasons] : []
@@ -634,9 +670,10 @@ function loadStepStateFromSaved() {
 function syncPhaseFromSavedMoment() {
   const m = currentMoment.value
   if (!m) return
-  const raw = annotations.value[m.action_id] || {}
+  const key = canonicalActionKey(m.action_id)
+  const raw = getAnnotationForActionId(m.action_id)
   const saved = migrateMomentAnnotation({ ...raw })
-  annotations.value[m.action_id] = saved
+  annotations.value[key] = saved
   const ex = String(saved[MOMENT_EXPLAIN_KEY] || '').trim()
   explanationTranscript.value = ex
   hasRecordedExplanation.value = !!ex
@@ -657,8 +694,9 @@ function loadCurrentMomentState() {
   if (!m) return
   explanationImportTimeLabel.value = ''
   importDropdownOpen.value = false
-  if (!annotations.value[m.action_id]) {
-    annotations.value[m.action_id] = {}
+  const akey = canonicalActionKey(m.action_id)
+  if (!annotations.value[akey]) {
+    annotations.value[akey] = {}
   }
   selectedLabelId.value = ''
   otherLabelText.value = ''
@@ -684,9 +722,10 @@ function saveCurrentStepAnnotation() {
   const m = currentMoment.value
   const sec = currentSection.value
   if (!m || !sec) return
-  const prev = annotations.value[m.action_id] || {}
+  const k = canonicalActionKey(m.action_id)
+  const prev = getAnnotationForActionId(m.action_id)
   if (sec.kind === 'yes_no_reasons') {
-    annotations.value[m.action_id] = {
+    annotations.value[k] = {
       ...prev,
       q4: q4Value.value,
       q4Reasons: [...q4Reasons.value],
@@ -696,7 +735,7 @@ function saveCurrentStepAnnotation() {
   }
   const labelText = getLabelText(sec.id, selectedLabelId.value)
   const otKey = `${sec.id}OtherText`
-  annotations.value[m.action_id] = {
+  annotations.value[k] = {
     ...prev,
     [sec.id]: labelText,
     [`${sec.id}LabelId`]: selectedLabelId.value,
@@ -716,7 +755,7 @@ function moveToNextStepOrMoment() {
   }
   if (!allAnnotationMomentsComplete()) {
     const n = annotationMoments.value.filter(
-      (mom) => !isMomentAnnotationComplete(annotations.value[mom.action_id] || {}),
+      (mom) => !isMomentAnnotationComplete(getAnnotationForActionId(mom.action_id)),
     ).length
     alert(
       `Please annotate all of your actions before finishing. ${n} moment(s) still have incomplete answers. You will be taken to the first incomplete moment.`,
@@ -730,8 +769,9 @@ function moveToNextStepOrMoment() {
 function saveMomentExplanationOnly() {
   const m = currentMoment.value
   if (!m) return
-  const prev = annotations.value[m.action_id] || {}
-  annotations.value[m.action_id] = {
+  const k = canonicalActionKey(m.action_id)
+  const prev = getAnnotationForActionId(m.action_id)
+  annotations.value[k] = {
     ...prev,
     [MOMENT_EXPLAIN_KEY]: explanationTranscript.value.trim(),
   }
@@ -825,7 +865,9 @@ function loadData() {
         const raw = annotationsPayloadForSave(data.saved_annotations)
         const migrated = {}
         for (const [k, v] of Object.entries(raw)) {
-          migrated[k] = migrateMomentAnnotation(v)
+          const ck = canonicalActionKey(k)
+          if (!ck) continue
+          migrated[ck] = migrateMomentAnnotation(v)
         }
         annotations.value = migrated
       }
@@ -919,12 +961,12 @@ function isLogEntryFullyAnnotated(entry) {
   if (idx < 0) return false
   const aid = annotationMoments.value[idx]?.action_id
   if (!aid) return false
-  return isMomentAnnotationComplete(annotations.value[aid] || {})
+  return isMomentAnnotationComplete(getAnnotationForActionId(aid))
 }
 
 function allAnnotationMomentsComplete() {
   return annotationMoments.value.every((mom) =>
-    isMomentAnnotationComplete(annotations.value[mom.action_id] || {}),
+    isMomentAnnotationComplete(getAnnotationForActionId(mom.action_id)),
   )
 }
 
@@ -932,7 +974,7 @@ function focusFirstIncompleteMoment() {
   for (let mi = 0; mi < annotationMoments.value.length; mi++) {
     const aid = annotationMoments.value[mi]?.action_id
     if (!aid) continue
-    const saved = annotations.value[aid] || {}
+    const saved = getAnnotationForActionId(aid)
     if (!isMomentAnnotationComplete(saved)) {
       currentMomentIndex.value = mi
       stepIndex.value = firstIncompleteStepIndexForSaved(saved)
@@ -941,6 +983,23 @@ function focusFirstIncompleteMoment() {
     }
   }
   return false
+}
+
+/** If this log line shows ✓, force explanation step (keeps in sync with isLogEntryFullyAnnotated). */
+function realignUiToExplanationIfLogEntryComplete(entry) {
+  if (!entry) return
+  if (getMomentIndexForLogEntry(entry) < 0) return
+  if (!isLogEntryFullyAnnotated(entry)) return
+  const m = currentMoment.value
+  if (!m?.action_id) return
+  const saved = migrateMomentAnnotation({ ...getAnnotationForActionId(m.action_id) })
+  const ex = String(saved[MOMENT_EXPLAIN_KEY] || '').trim()
+  if (!ex) return
+  explanationTranscript.value = ex
+  hasRecordedExplanation.value = true
+  annotationPhase.value = 'record'
+  stepIndex.value = 0
+  loadStepStateFromSaved()
 }
 
 function logEntryIsInteractive(entry) {
@@ -963,6 +1022,7 @@ async function onInteractionLogEntryClick(entry) {
     currentMomentIndex.value = ownMi
     // Same moment as before: currentMoment watch does not run; must re-sync phase (e.g. completed → explanation).
     loadCurrentMomentState()
+    realignUiToExplanationIfLogEntryComplete(entry)
   }
 
   if (navIdx >= 0) {
@@ -986,6 +1046,7 @@ async function screenshotNavDelta(delta) {
   if (mi >= 0) {
     currentMomentIndex.value = mi
     loadCurrentMomentState()
+    realignUiToExplanationIfLogEntryComplete(entry)
   }
 }
 
@@ -1083,8 +1144,8 @@ watch(currentMomentIndex, () => {
 })
 
 onMounted(() => {
-  if (route.query.session_id) sessionId.value = route.query.session_id
-  if (route.query.participant_id) participantId.value = route.query.participant_id
+  sessionId.value = route.query.session_id || sessionStorage.getItem('session_id') || sessionId.value
+  participantId.value = route.query.participant_id || sessionStorage.getItem('participant_id') || participantId.value
   document.addEventListener('click', closeImportDropdownOnOutsideClick)
   loadData()
 })
